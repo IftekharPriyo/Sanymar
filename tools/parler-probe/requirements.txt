@@ -1,0 +1,4 @@
+# PyTorch must be installed separately from the official Windows/CUDA selector.
+descript-audiotools @ git+https://github.com/descriptinc/audiotools.git@348ebf2034ce24e2a91a553e3171c20b5f5fd59a
+git+https://github.com/huggingface/parler-tts.git@d108732cd57788ec86bc857d99a6cabd66663d68
+sentencepiece>=0.2,<0.3

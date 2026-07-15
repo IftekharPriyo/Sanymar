@@ -1,0 +1,40 @@
+[package]
+name = "sanymar"
+version = "0.1.0"
+description = "A local-first personal AI radio jockey"
+authors = ["Sanymar contributors"]
+edition = "2021"
+
+[lib]
+name = "sanymar_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+keyring = { version = "4.1", default-features = false, features = ["v1"] }
+oauth2 = "5"
+rand = "0.8"
+rand_chacha = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rodio = { version = "=0.22.2", default-features = false, features = ["playback", "wav", "tracing"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "chrono", "uuid"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2.5"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sanymar",
+  "version": "0.1.0",
+  "identifier": "com.sanymar.desktop",
+  "build": {
+    "beforeDevCommand": "npm.cmd run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm.cmd run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Sanymar",
+        "width": 1120,
+        "height": 760,
+        "minWidth": 860,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "target/release/onnxruntime.dll": "onnxruntime.dll",
+      "target/release/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
+      "target/release/sherpa-onnx-c-api.dll": "sherpa-onnx-c-api.dll",
+      "target/release/sherpa-onnx-cxx-api.dll": "sherpa-onnx-cxx-api.dll"
+    }
+  }
+}

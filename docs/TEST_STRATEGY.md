@@ -1,0 +1,21 @@
+# Test strategy
+
+Ollama provider tests use an in-process `wiremock` HTTP server and never require a real Ollama installation. They cover health/model discovery, deterministic non-streaming structured chat requests, exclusion of provider identifiers and sensitive metadata, segment-specific spoken-delivery guidance, normalization before validation, an error-specific bounded corrective retry that does not echo the rejected draft, typed malformed-output failures, fail-soft silence classification, request timeouts, and cancellation. Domain tests cover removal of speaker labels, title quotes, emoji, page formatting, and non-spoken tags while retaining contractions and dialogue text. Track-change cancellation is also tested at the coordinator boundary.
+
+Sherpa path-boundary tests verify that canonical Windows verbatim paths are converted to native-compatible DOS and UNC strings without changing canonical containment validation. Backend tests remain model-independent; an actual user-managed Kokoro model may be probed manually during local diagnosis but is never required by the automated suite.
+
+Native audio tests use a fake blocking backend and temporary bounded artifacts, so CI requires no sound device. They cover artifact rejection and track-change cancellation. Default-device decoding/playback remains a local integration probe because hardware is not deterministic; it has been verified with the configured Kokoro model on Windows.
+
+MusicBrainz tests also use `wiremock`, never the public service. They cover identifying User-Agent/query minimization, exact matching, authoritative verification, normalized SQLite caching, ambiguity rejection with negative caching, timeouts, cancellation, and contact-header validation.
+
+Sherpa TTS tests use a fake synthesis backend rather than requiring a Kokoro model. They cover canonical asset layout, voice bounds, typed segment-to-delivery mapping, bounded delivery-rate adjustment, blocking cancellation, invalid-sample rejection, output confinement, PCM WAV headers/lengths, duration, and absence of partial artifacts. Native model loading and subjective expressiveness remain user health-check/integration tests because model files and deterministic audio perception are not part of the repository.
+
+Parler adapter tests use `wiremock` and never import PyTorch or require a local model. They cover loopback-only configuration, exact minimized request fields, health/model/speaker validation, cancellation, bounded streaming response reads, PCM WAV validation, and atomic cache output. Pure Python service tests cover its fixed delivery descriptions and rejection of reference audio, unknown fields, and out-of-range controls. Actual GPU loading, latency, and subjective expression remain explicit local probes.
+
+Rust unit tests cover normalized variants, deterministic/silence content choices, repetition avoidance, validation, redaction, state transitions, stale-job and queue-change cancellation, automatic preparation/playback timing boundaries, strict Spotify redirect validation, callback parsing, OAuth-denial mapping, sanitized Spotify track normalization, unsafe artwork rejection, and rate-limit mapping. Repository tests use isolated SQLite databases and real migrations. Live Spotify timing and default-device playback verification remain manual and must not log response bodies or tokens.
+
+Vitest covers pure UI/service behavior and representative components. Browser fallback behavior is tested as mock behavior, not native IPC. Playwright/Tauri end-to-end coverage is deferred until real desktop flows stabilize.
+
+High-value future scenarios include disconnected Spotify, no playback, account/control limitation, queue changes, device moves, provider timeouts, Ollama/model absence, TTS/audio failure, shutdown cancellation, obscure/multi-artist/versioned tracks, deletion/retention, and redaction. Random and time-dependent logic must accept deterministic inputs.
+
+Before declaring a change complete, run frontend formatting/lint/tests/build and Rust fmt/Clippy/tests/check. Native packaging is a separate release check.

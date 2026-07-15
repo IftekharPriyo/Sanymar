@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Sanymar radio mark">
+  <rect width="512" height="512" rx="112" fill="#c9f26b"/>
+  <circle cx="256" cy="256" r="164" fill="#151b17"/>
+  <rect x="222" y="132" width="68" height="174" rx="34" fill="#edf1e8"/>
+  <path d="M178 246v20c0 43 35 78 78 78s78-35 78-78v-20" fill="none" stroke="#edf1e8" stroke-width="26" stroke-linecap="round"/>
+  <path d="M256 344v48M210 392h92" fill="none" stroke="#edf1e8" stroke-width="26" stroke-linecap="round"/>
+  <path d="M142 191c-24 38-24 92 0 130M370 191c24 38 24 92 0 130" fill="none" stroke="#c9f26b" stroke-width="22" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,26 @@
+# Known limitations
+
+- Spotify PKCE account authorization and Windows token storage are implemented, but have not yet been verified with the user's Spotify application.
+- Spotify refresh and read-only playback/queue normalization are implemented, but live responses still require user verification across account/device states.
+- The adapter defines pause/resume/skip operations, but the UI intentionally does not invoke them until transition recovery and stale-job integration are tested.
+- Live mode observes only Spotify track items; episodes and other item types are ignored.
+- MusicBrainz currently contributes only strongly matched first-release-date metadata; it does not provide recording stories, song meanings, chart history, or other narrative facts.
+- Ollama generation and health checks are implemented for loopback HTTP endpoints, but model quality and JSON-schema compliance vary by installed model.
+- Ollama responses are non-streaming and each attempt uses a fixed 60-second request timeout. One corrective retry is made only for malformed or locally invalid model output; provider/network failures are not retried. A second invalid result becomes silence, so an individual commentary slot can be skipped without interrupting the broadcast. There is no model-management UI, and Sanymar never installs models.
+- Weak or ambiguous MusicBrainz matches intentionally produce no facts. This favors silence/non-factual commentary over incorrect metadata and can miss legitimate alternate spellings or versions.
+- Cache freshness is time-based; there is no manual invalidation UI. Negative results are cached for the configured retention period.
+- Expired cache rows are refreshed when the track is encountered again, but orphaned stale rows are not yet pruned automatically.
+- Kokoro speech plays through the OS default output device only. The saved `audioOutputDevice` setting remains inactive; enumeration, hot-plug recovery, and explicit device selection are not implemented.
+- Kokoro combines speech-first script rhythm with bounded pacing but still does not provide genuine semantic emotion, pitch, or emphasis control. Script shaping improves naturalness but cannot guarantee a human performance. Parler-TTS Mini is more expressive, but its performance and delivery are model-dependent and it requires a manually started Python/PyTorch loopback service and a capable local GPU.
+- Parler's model has a long cold start and local tests measured roughly 1.30-1.53 real-time factor on the current machine. Sanymar cancels and rejects stale client results immediately when the track changes, but an inference already executing in the single-worker provider can continue using the GPU until that generation finishes.
+- Automatic transition speech relies on Spotify's polled progress and estimated WAV duration. It aims to finish near the boundary but may start early or be cancelled on a fast skip, delayed provider response, network jitter, or queue change.
+- Spotify is not paused or ducked while voice plays, so manual and automatic speech overlap active music. Pause/resume requires separately tested transition recovery before Sanymar may control playback.
+- Kokoro model assets are not bundled or managed. The user must install them explicitly, and corrupted/incompatible models may emit native-library diagnostics during health checks.
+- Generated WAV cache cleanup is not implemented yet. Windows packages include the pinned Sherpa/ONNX Runtime DLLs beside the executable, but third-party notice and redistribution review is still required before public distribution. Kokoro/Parler model assets, Parler, and Python are not bundled.
+- Synthesis cancellation is cooperative through Sherpa's progress callback; a native inference call may take a short time to return after cancellation.
+- Transition speech scheduling is implemented, but automated music transitions and recovery-aware Spotify pause/resume remain unimplemented.
+- Script validation is heuristic and cannot guarantee factual accuracy.
+- Cancellation aborts the client request when dashboard polling observes a changed active track; detection is limited by the polling interval and Ollama may briefly continue server-side computation after the client disconnects.
+- Database deletion/retention UI remains future work. Spotify disconnect deletes its Windows Credential Manager entry.
+- The browser dev server uses a fallback mock rather than Tauri IPC.
+- Local Windows MSI and NSIS packaging is configured, but installers are unsigned. Code signing, release automation, accessibility audit, clean-machine validation, and end-to-end desktop tests are not configured.
