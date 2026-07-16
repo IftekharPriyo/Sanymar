@@ -147,6 +147,8 @@ Automatic transition speech requires live Spotify playback and a real TTS provid
 
 For every stable current/next track pair, a Rust background service generates one spoken segment immediately, synthesizes and validates its WAV ahead of time, then holds that artifact until its measured duration fits the closing seconds of the current track. Automatic mode requires a spoken segment rather than editorial silence. Recent segment, fact, and opening memory still limits repetition.
 
+The service is supervised and uses watchdog deadlines around Spotify polling, script/TTS preparation, audio stopping, and playback. A failed or timed-out preparation receives one cooldown retry for the same track pair; after that, the pair is skipped safely and the next stable pair starts with a fresh attempt budget. If the scheduler task itself fails, it is cleaned up and restarted automatically.
+
 A current-track or queue change cancels generation, synthesis, or playback and rejects stale artifacts. Timing uses Spotify's polled progress and the WAV duration, so fast skips, queue edits, provider latency, or network jitter can cancel a slot. Commentary overlaps the music because pause, duck, and resume are not implemented.
 
 **Generate with Ollama** and **Speak test segment** remain available as manual diagnostics.
@@ -205,6 +207,6 @@ AGENTS.md                 Rules for coding agents
 
 ## Known limitations
 
-Sanymar schedules commentary near Spotify track boundaries but does not control the music transition. Voice overlaps active music because pause, duck, resume, and recovery behavior are not implemented. Timing is approximate.
+Sanymar schedules commentary near Spotify track boundaries but does not control the music transition. Voice overlaps active music because pause, duck, and resume are not implemented. Timing is approximate. Scheduler watchdogs recover stalled application tasks, but a cancelled native inference call may take a short time to stop cooperatively.
 
 Output-device selection, WAV cache cleanup, code signing, public redistribution review, release automation, and desktop end-to-end tests are unfinished. Script validation is defensive but cannot guarantee factual correctness or human-quality delivery. See [Known limitations](docs/KNOWN_LIMITATIONS.md) for the complete list.

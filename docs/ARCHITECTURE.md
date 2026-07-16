@@ -62,6 +62,8 @@ Mock or Ollama generation exercises monitoring through waiting-for-transition. M
 
 When `automaticTransitionSpeech` is enabled in live mode, a Rust application service polls normalized Spotify playback independently of React. It identifies the current/queued track pair, begins one generation-and-synthesis attempt as soon as that pair is stable, and keeps the validated WAV in memory until its duration fits the remaining track time plus a small boundary buffer. Preparing early prevents local LLM and model-loading latency from consuming the transition slot. Automatic mode requires a spoken segment for every stable pair rather than applying editorial silence; recent segment, fact, and opening memory still limits repetition. Playback is scheduled to finish near the transition. The service cancels on current-track changes, queue changes, disabled automation, or stale identity. It never invokes Spotify pause, resume, or skip; therefore speech overlays the music rather than creating a true music gap.
 
+The automation worker runs beneath a restart supervisor. Outer watchdogs bound each Spotify poll, end-to-end generation/synthesis preparation, audio stop, and playback even when an adapter's own timeout or cancellation fails to return. A preparation failure or watchdog expiry cancels the coordinator and permits one retry after a fixed cooldown; exhausting that pair does not consume the next pair's fresh attempt budget. Playback expiry stops audio and never replays the same artifact. Provider-specific timeouts remain the first line of failure mapping, while these deadlines protect scheduler liveness.
+
 ## Data and privacy
 
 SQLite stores settings, normalized catalog metadata, attributed facts, positive/negative fact lookup cache markers, history, and generated scripts. Fact verification distinguishes human review from authoritative automated metadata. It stores the public Spotify Client ID and the user-supplied MusicBrainz contact but never access or refresh tokens. Spotify tokens use Windows Credential Manager behind `CredentialStore`. Logs are structured by module, state transitions include correlation/job IDs, and sensitive strings are redacted. Complete prompts are not logged by default.
@@ -69,3 +71,5 @@ SQLite stores settings, normalized catalog metadata, attributed facts, positive/
 ## Cancellation and failure
 
 Async providers accept cancellation context where work can be long-lived. The coordinator binds artifacts to a job and track fingerprint and refuses stale artifacts. Typed failures distinguish provider, authentication, playback, fact, LLM, TTS, audio, validation, database, configuration, cancellation, and internal categories. Recoverable provider outages do not prevent mock-mode startup.
+
+Aborting an async wrapper cannot forcibly terminate native blocking inference. Native providers therefore retain cooperative cancellation, while the automation watchdog releases scheduler state so subsequent track pairs can proceed.

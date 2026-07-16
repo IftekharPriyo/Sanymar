@@ -18,6 +18,7 @@
 - Kokoro model assets are not bundled or managed. The user must install them explicitly, and corrupted/incompatible models may emit native-library diagnostics during health checks.
 - Generated WAV cache cleanup is not implemented yet. Windows packages include the pinned Sherpa/ONNX Runtime DLLs beside the executable, but third-party notice and redistribution review is still required before public distribution. Kokoro/Parler model assets, Parler, and Python are not bundled.
 - Synthesis cancellation is cooperative through Sherpa's progress callback; a native inference call may take a short time to return after cancellation.
+- Automatic transition watchdogs release stalled scheduler state and restart a failed worker, but Rust cannot forcibly terminate a native inference thread. A cancelled native call may briefly continue in the background, and a repeatedly unavailable provider can still cause the current pair to be skipped after its bounded retry.
 - Transition speech scheduling is implemented, but automated music transitions and recovery-aware Spotify pause/resume remain unimplemented.
 - Script validation is heuristic and cannot guarantee factual accuracy.
 - Cancellation aborts the client request when dashboard polling observes a changed active track; detection is limited by the polling interval and Ollama may briefly continue server-side computation after the client disconnects.

@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use tokio::{task::JoinHandle, time::MissedTickBehavior};
+use tokio::{
+    task::JoinHandle,
+    time::{Instant, MissedTickBehavior},
+};
 
 use crate::{
     audio::AudioPlayer,
@@ -14,6 +17,14 @@ use crate::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const PLAYBACK_POLL_TIMEOUT: Duration = Duration::from_secs(20);
+const PREPARATION_TIMEOUT: Duration = Duration::from_secs(180);
+const PLAYBACK_TIMEOUT_GRACE: Duration = Duration::from_secs(20);
+const MAX_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(120);
+const AUDIO_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+const RETRY_COOLDOWN: Duration = Duration::from_secs(10);
+const SUPERVISOR_RESTART_DELAY: Duration = Duration::from_secs(2);
+const MAX_PREPARATION_ATTEMPTS: u8 = 2;
 const PLAYBACK_FINISH_BUFFER_MS: u64 = 3_000;
 const FALLBACK_SPEECH_DURATION_MS: u64 = 5_000;
 
@@ -24,13 +35,37 @@ struct TransitionKey {
 }
 
 pub async fn run_transition_automation(app: AppHandle) {
+    loop {
+        let worker = tokio::spawn(run_transition_worker(app.clone()));
+        match worker.await {
+            Ok(()) => tracing::warn!("automatic transition worker stopped unexpectedly"),
+            Err(error) if error.is_cancelled() => return,
+            Err(error) => {
+                tracing::error!(error = %error, "automatic transition worker crashed")
+            }
+        }
+
+        let state = app.state::<AppState>();
+        state.coordinator.write().await.cancel();
+        stop_audio_with_timeout(&state).await;
+        tracing::info!(
+            restart_delay_ms = SUPERVISOR_RESTART_DELAY.as_millis(),
+            "automatic transition worker will restart"
+        );
+        tokio::time::sleep(SUPERVISOR_RESTART_DELAY).await;
+    }
+}
+
+async fn run_transition_worker(app: AppHandle) {
     let mut interval = tokio::time::interval(POLL_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut active_key: Option<TransitionKey> = None;
-    let mut attempted_key: Option<TransitionKey> = None;
-    let mut preparation: Option<JoinHandle<Result<Option<PreparedAudio>, AppError>>> = None;
+    let mut preparation_attempts = 0_u8;
+    let mut retry_not_before: Option<Instant> = None;
+    let mut pair_complete = false;
+    let mut preparation: Option<WatchedTask<Result<Option<PreparedAudio>, AppError>>> = None;
     let mut ready_audio: Option<PreparedAudio> = None;
-    let mut playback: Option<JoinHandle<Result<SpeechResultView, AppError>>> = None;
+    let mut playback: Option<WatchedTask<Result<SpeechResultView, AppError>>> = None;
 
     loop {
         interval.tick().await;
@@ -40,26 +75,73 @@ pub async fn run_transition_automation(app: AppHandle) {
         if !settings.automatic_transition_speech || settings.mock_mode {
             if active_key.take().is_some() {
                 state.coordinator.write().await.cancel();
-                let _ = state.audio.stop().await;
+                stop_audio_with_timeout(&state).await;
             }
             abort_task(&mut preparation);
             abort_task(&mut playback);
-            attempted_key = None;
+            preparation_attempts = 0;
+            retry_not_before = None;
+            pair_complete = false;
             ready_audio = None;
             continue;
         }
 
-        settle_preparation(&mut preparation, &mut ready_audio).await;
+        let now = Instant::now();
+        if preparation
+            .as_ref()
+            .is_some_and(|task| task.is_expired(now))
+        {
+            tracing::warn!(
+                timeout_ms = PREPARATION_TIMEOUT.as_millis(),
+                "automatic transition preparation watchdog expired"
+            );
+            state.coordinator.write().await.cancel();
+            abort_task(&mut preparation);
+            ready_audio = None;
+            schedule_retry(
+                preparation_attempts,
+                &mut retry_not_before,
+                &mut pair_complete,
+                now,
+            );
+        }
+        match settle_preparation(&mut preparation, &mut ready_audio).await {
+            PreparationSettlement::Pending => {}
+            PreparationSettlement::Completed => pair_complete = true,
+            PreparationSettlement::Failed => schedule_retry(
+                preparation_attempts,
+                &mut retry_not_before,
+                &mut pair_complete,
+                now,
+            ),
+        }
+
+        if playback.as_ref().is_some_and(|task| task.is_expired(now)) {
+            tracing::warn!("automatic transition playback watchdog expired");
+            state.coordinator.write().await.cancel();
+            stop_audio_with_timeout(&state).await;
+            abort_task(&mut playback);
+            pair_complete = true;
+        }
         settle_playback(&mut playback).await;
 
         let snapshot = match spotify_provider(&settings, state.credential_store.clone()) {
-            Ok(provider) => match provider.playback_state().await {
-                Ok(snapshot) => snapshot,
-                Err(error) => {
-                    tracing::warn!(error = %error, "automatic transition playback poll failed");
-                    continue;
+            Ok(provider) => {
+                match tokio::time::timeout(PLAYBACK_POLL_TIMEOUT, provider.playback_state()).await {
+                    Ok(Ok(snapshot)) => snapshot,
+                    Ok(Err(error)) => {
+                        tracing::warn!(error = %error, "automatic transition playback poll failed");
+                        continue;
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            timeout_ms = PLAYBACK_POLL_TIMEOUT.as_millis(),
+                            "automatic transition playback poll watchdog expired"
+                        );
+                        continue;
+                    }
                 }
-            },
+            }
             Err(error) => {
                 tracing::warn!(error = %error, "automatic transition provider is not configured");
                 continue;
@@ -69,11 +151,13 @@ pub async fn run_transition_automation(app: AppHandle) {
         let Some(key) = transition_key(&snapshot) else {
             if active_key.take().is_some() {
                 state.coordinator.write().await.cancel();
-                let _ = state.audio.stop().await;
+                stop_audio_with_timeout(&state).await;
             }
             abort_task(&mut preparation);
             abort_task(&mut playback);
-            attempted_key = None;
+            preparation_attempts = 0;
+            retry_not_before = None;
+            pair_complete = false;
             ready_audio = None;
             continue;
         };
@@ -83,11 +167,13 @@ pub async fn run_transition_automation(app: AppHandle) {
                 .write()
                 .await
                 .cancel_if_playback_changed(&key.current_track_id, Some(&key.next_track_id));
-            let _ = state.audio.stop().await;
+            stop_audio_with_timeout(&state).await;
             abort_task(&mut preparation);
             abort_task(&mut playback);
             active_key = Some(key.clone());
-            attempted_key = None;
+            preparation_attempts = 0;
+            retry_not_before = None;
+            pair_complete = false;
             ready_audio = None;
             tracing::info!("automatic transition track pair changed");
         }
@@ -104,34 +190,67 @@ pub async fn run_transition_automation(app: AppHandle) {
                         "automatic transition playback started"
                     );
                     let app_for_playback = app.clone();
-                    playback = Some(tokio::spawn(async move {
-                        let state = app_for_playback.state::<AppState>();
-                        play_prepared_audio(&state, prepared).await
-                    }));
+                    let timeout = playback_timeout(prepared.artifact.duration_ms);
+                    playback = Some(WatchedTask::new(
+                        tokio::spawn(async move {
+                            let state = app_for_playback.state::<AppState>();
+                            play_prepared_audio(&state, prepared).await
+                        }),
+                        timeout,
+                    ));
                 }
             }
             continue;
         }
 
-        if attempted_key.as_ref() == Some(&key) || !should_prepare(&snapshot) {
+        if pair_complete
+            || preparation_attempts >= MAX_PREPARATION_ATTEMPTS
+            || retry_not_before.is_some_and(|deadline| now < deadline)
+            || !should_prepare(&snapshot)
+        {
             continue;
         }
 
-        attempted_key = Some(key);
-        tracing::info!("automatic transition preparation started");
+        preparation_attempts += 1;
+        retry_not_before = None;
+        tracing::info!(
+            attempt = preparation_attempts,
+            "automatic transition preparation started"
+        );
         let app_for_preparation = app.clone();
-        preparation = Some(tokio::spawn(async move {
-            let state = app_for_preparation.state::<AppState>();
-            let settings = state.settings.read().await.clone();
-            let generated =
-                generate_segment_for_playback(&state, settings.clone(), snapshot, true).await?;
-            if generated.dialogue.is_none() {
-                return Ok(None);
-            }
-            synthesize_recent_script(&app_for_preparation, &state, settings)
-                .await
-                .map(Some)
-        }));
+        preparation = Some(WatchedTask::new(
+            tokio::spawn(async move {
+                let state = app_for_preparation.state::<AppState>();
+                let settings = state.settings.read().await.clone();
+                let generated =
+                    generate_segment_for_playback(&state, settings.clone(), snapshot, true).await?;
+                if generated.dialogue.is_none() {
+                    return Ok(None);
+                }
+                synthesize_recent_script(&app_for_preparation, &state, settings)
+                    .await
+                    .map(Some)
+            }),
+            PREPARATION_TIMEOUT,
+        ));
+    }
+}
+
+struct WatchedTask<T> {
+    handle: JoinHandle<T>,
+    deadline: Instant,
+}
+
+impl<T> WatchedTask<T> {
+    fn new(handle: JoinHandle<T>, timeout: Duration) -> Self {
+        Self {
+            handle,
+            deadline: Instant::now() + timeout,
+        }
+    }
+
+    fn is_expired(&self, now: Instant) -> bool {
+        !self.handle.is_finished() && now >= self.deadline
     }
 }
 
@@ -159,17 +278,52 @@ fn should_play(playback: &PlaybackState, duration_ms: Option<u64>) -> bool {
         .is_some_and(|remaining| remaining <= speech_duration + PLAYBACK_FINISH_BUFFER_MS)
 }
 
-async fn settle_preparation(
-    task: &mut Option<JoinHandle<Result<Option<PreparedAudio>, AppError>>>,
-    ready_audio: &mut Option<PreparedAudio>,
+fn playback_timeout(duration_ms: Option<u64>) -> Duration {
+    Duration::from_millis(duration_ms.unwrap_or(FALLBACK_SPEECH_DURATION_MS))
+        .saturating_add(PLAYBACK_TIMEOUT_GRACE)
+        .min(MAX_PLAYBACK_TIMEOUT)
+}
+
+fn schedule_retry(
+    attempts: u8,
+    retry_not_before: &mut Option<Instant>,
+    pair_complete: &mut bool,
+    now: Instant,
 ) {
-    if !task.as_ref().is_some_and(|task| task.is_finished()) {
-        return;
+    if attempts < MAX_PREPARATION_ATTEMPTS {
+        *retry_not_before = Some(now + RETRY_COOLDOWN);
+        tracing::info!(
+            retry_delay_ms = RETRY_COOLDOWN.as_millis(),
+            "automatic transition preparation will retry"
+        );
+    } else {
+        *pair_complete = true;
+        tracing::warn!("automatic transition preparation attempts exhausted for this track pair");
+    }
+}
+
+async fn stop_audio_with_timeout(state: &AppState) {
+    match tokio::time::timeout(AUDIO_STOP_TIMEOUT, state.audio.stop()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(error = %error, "automatic transition audio stop failed"),
+        Err(_) => tracing::warn!(
+            timeout_ms = AUDIO_STOP_TIMEOUT.as_millis(),
+            "automatic transition audio stop watchdog expired"
+        ),
+    }
+}
+
+async fn settle_preparation(
+    task: &mut Option<WatchedTask<Result<Option<PreparedAudio>, AppError>>>,
+    ready_audio: &mut Option<PreparedAudio>,
+) -> PreparationSettlement {
+    if !task.as_ref().is_some_and(|task| task.handle.is_finished()) {
+        return PreparationSettlement::Pending;
     }
     let Some(completed) = task.take() else {
-        return;
+        return PreparationSettlement::Pending;
     };
-    match completed.await {
+    match completed.handle.await {
         Ok(Ok(prepared)) => {
             if let Some(prepared) = prepared {
                 tracing::info!(
@@ -180,22 +334,36 @@ async fn settle_preparation(
             } else {
                 tracing::info!("automatic transition selected intentional silence");
             }
+            PreparationSettlement::Completed
         }
-        Ok(Err(AppError::Cancelled | AppError::StaleJob)) => {}
-        Ok(Err(error)) => tracing::warn!(error = %error, "automatic transition preparation failed"),
-        Err(error) if error.is_cancelled() => {}
-        Err(error) => tracing::warn!(error = %error, "automatic transition task failed"),
+        Ok(Err(AppError::Cancelled | AppError::StaleJob)) => PreparationSettlement::Completed,
+        Ok(Err(error)) => {
+            tracing::warn!(error = %error, "automatic transition preparation failed");
+            PreparationSettlement::Failed
+        }
+        Err(error) if error.is_cancelled() => PreparationSettlement::Completed,
+        Err(error) => {
+            tracing::warn!(error = %error, "automatic transition task failed");
+            PreparationSettlement::Failed
+        }
     }
 }
 
-async fn settle_playback(task: &mut Option<JoinHandle<Result<SpeechResultView, AppError>>>) {
-    if !task.as_ref().is_some_and(|task| task.is_finished()) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparationSettlement {
+    Pending,
+    Completed,
+    Failed,
+}
+
+async fn settle_playback(task: &mut Option<WatchedTask<Result<SpeechResultView, AppError>>>) {
+    if !task.as_ref().is_some_and(|task| task.handle.is_finished()) {
         return;
     }
     let Some(completed) = task.take() else {
         return;
     };
-    match completed.await {
+    match completed.handle.await {
         Ok(Ok(_)) => tracing::info!("automatic transition playback completed"),
         Ok(Err(AppError::Cancelled | AppError::StaleJob)) => {
             tracing::info!("automatic transition playback cancelled after a track change");
@@ -206,9 +374,9 @@ async fn settle_playback(task: &mut Option<JoinHandle<Result<SpeechResultView, A
     }
 }
 
-fn abort_task<T>(task: &mut Option<JoinHandle<T>>) {
+fn abort_task<T>(task: &mut Option<WatchedTask<T>>) {
     if let Some(task) = task.take() {
-        task.abort();
+        task.handle.abort();
     }
 }
 
@@ -256,5 +424,25 @@ mod tests {
         let invalid = playback(201_000, 200_000);
         assert!(!should_prepare(&invalid));
         assert!(!should_play(&invalid, Some(4_000)));
+    }
+
+    #[test]
+    fn failed_preparation_gets_one_bounded_retry() {
+        let now = Instant::now();
+        let mut retry_not_before = None;
+        let mut pair_complete = false;
+
+        schedule_retry(1, &mut retry_not_before, &mut pair_complete, now);
+        assert_eq!(retry_not_before, Some(now + RETRY_COOLDOWN));
+        assert!(!pair_complete);
+
+        schedule_retry(2, &mut retry_not_before, &mut pair_complete, now);
+        assert!(pair_complete);
+    }
+
+    #[test]
+    fn playback_watchdog_is_bounded() {
+        assert_eq!(playback_timeout(Some(4_000)), Duration::from_secs(24));
+        assert_eq!(playback_timeout(Some(u64::MAX)), MAX_PLAYBACK_TIMEOUT);
     }
 }
