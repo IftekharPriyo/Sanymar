@@ -13,7 +13,8 @@ use crate::{
         synthesize_recent_script, AppState, PreparedAudio, SpeechResultView,
     },
     errors::AppError,
-    music_provider::{MusicProvider, PlaybackState},
+    music_provider::{MusicProvider, PlaybackInterruption, PlaybackState},
+    settings::AppSettings,
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -21,11 +22,14 @@ const PLAYBACK_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 const PREPARATION_TIMEOUT: Duration = Duration::from_secs(180);
 const PLAYBACK_TIMEOUT_GRACE: Duration = Duration::from_secs(20);
 const MAX_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(120);
+const TRANSITION_ARM_WINDOW_MS: u64 = 6_000;
+const PAUSE_COMMAND_LEAD_MS: u64 = 750;
+const TRACK_HANDOFF_POLL: Duration = Duration::from_millis(100);
+const TRACK_HANDOFF_ATTEMPTS: usize = 30;
 const AUDIO_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const RETRY_COOLDOWN: Duration = Duration::from_secs(10);
 const SUPERVISOR_RESTART_DELAY: Duration = Duration::from_secs(2);
 const MAX_PREPARATION_ATTEMPTS: u8 = 2;
-const PLAYBACK_FINISH_BUFFER_MS: u64 = 3_000;
 const FALLBACK_SPEECH_DURATION_MS: u64 = 5_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +52,8 @@ pub async fn run_transition_automation(app: AppHandle) {
         let state = app.state::<AppState>();
         state.coordinator.write().await.cancel();
         stop_audio_with_timeout(&state).await;
+        let settings = state.settings.read().await.clone();
+        resume_spotify_if_interrupted(&state, &settings).await;
         tracing::info!(
             restart_delay_ms = SUPERVISOR_RESTART_DELAY.as_millis(),
             "automatic transition worker will restart"
@@ -77,6 +83,7 @@ async fn run_transition_worker(app: AppHandle) {
                 state.coordinator.write().await.cancel();
                 stop_audio_with_timeout(&state).await;
             }
+            resume_spotify_if_interrupted(&state, &settings).await;
             abort_task(&mut preparation);
             abort_task(&mut playback);
             preparation_attempts = 0;
@@ -122,8 +129,11 @@ async fn run_transition_worker(app: AppHandle) {
             stop_audio_with_timeout(&state).await;
             abort_task(&mut playback);
             pair_complete = true;
+            resume_spotify_if_interrupted(&state, &settings).await;
         }
-        settle_playback(&mut playback).await;
+        if settle_playback(&mut playback).await {
+            resume_spotify_if_interrupted(&state, &settings).await;
+        }
 
         let snapshot = match spotify_provider(&settings, state.credential_store.clone()) {
             Ok(provider) => {
@@ -153,6 +163,7 @@ async fn run_transition_worker(app: AppHandle) {
                 state.coordinator.write().await.cancel();
                 stop_audio_with_timeout(&state).await;
             }
+            resume_spotify_if_interrupted(&state, &settings).await;
             abort_task(&mut preparation);
             abort_task(&mut playback);
             preparation_attempts = 0;
@@ -161,7 +172,11 @@ async fn run_transition_worker(app: AppHandle) {
             ready_audio = None;
             continue;
         };
-        if active_key.as_ref() != Some(&key) {
+        let expected_handoff = playback.is_some()
+            && active_key
+                .as_ref()
+                .is_some_and(|active| active.next_track_id == key.current_track_id);
+        if active_key.as_ref() != Some(&key) && !expected_handoff {
             state
                 .coordinator
                 .write()
@@ -170,6 +185,7 @@ async fn run_transition_worker(app: AppHandle) {
             stop_audio_with_timeout(&state).await;
             abort_task(&mut preparation);
             abort_task(&mut playback);
+            resume_spotify_if_interrupted(&state, &settings).await;
             active_key = Some(key.clone());
             preparation_attempts = 0;
             retry_not_before = None;
@@ -178,23 +194,34 @@ async fn run_transition_worker(app: AppHandle) {
             tracing::info!("automatic transition track pair changed");
         }
 
+        if expected_handoff {
+            continue;
+        }
+
         if playback.is_some() || preparation.is_some() || !snapshot.is_playing {
             continue;
         }
 
-        if let Some(prepared) = ready_audio.as_ref() {
-            if should_play(&snapshot, prepared.artifact.duration_ms) {
+        if ready_audio.is_some() {
+            if should_start_transition(&snapshot) {
                 if let Some(prepared) = ready_audio.take() {
                     tracing::info!(
                         duration_ms = prepared.artifact.duration_ms,
                         "automatic transition playback started"
                     );
                     let app_for_playback = app.clone();
-                    let timeout = playback_timeout(prepared.artifact.duration_ms);
+                    let timeout =
+                        transition_timeout(remaining_ms(&snapshot), prepared.artifact.duration_ms);
+                    let transition_key = key.clone();
                     playback = Some(WatchedTask::new(
                         tokio::spawn(async move {
-                            let state = app_for_playback.state::<AppState>();
-                            play_prepared_audio(&state, prepared).await
+                            play_transition_at_boundary(
+                                &app_for_playback,
+                                prepared,
+                                snapshot,
+                                transition_key,
+                            )
+                            .await
                         }),
                         timeout,
                     ));
@@ -272,16 +299,18 @@ fn should_prepare(playback: &PlaybackState) -> bool {
         && remaining_ms(playback).is_some_and(|remaining| remaining > 0)
 }
 
-fn should_play(playback: &PlaybackState, duration_ms: Option<u64>) -> bool {
-    let speech_duration = duration_ms.unwrap_or(FALLBACK_SPEECH_DURATION_MS);
-    remaining_ms(playback)
-        .is_some_and(|remaining| remaining <= speech_duration + PLAYBACK_FINISH_BUFFER_MS)
+fn should_start_transition(playback: &PlaybackState) -> bool {
+    remaining_ms(playback).is_some_and(|remaining| remaining <= TRANSITION_ARM_WINDOW_MS)
 }
 
-fn playback_timeout(duration_ms: Option<u64>) -> Duration {
-    Duration::from_millis(duration_ms.unwrap_or(FALLBACK_SPEECH_DURATION_MS))
-        .saturating_add(PLAYBACK_TIMEOUT_GRACE)
-        .min(MAX_PLAYBACK_TIMEOUT)
+fn transition_timeout(remaining_ms: Option<u64>, duration_ms: Option<u64>) -> Duration {
+    Duration::from_millis(
+        remaining_ms
+            .unwrap_or_default()
+            .saturating_add(duration_ms.unwrap_or(FALLBACK_SPEECH_DURATION_MS)),
+    )
+    .saturating_add(PLAYBACK_TIMEOUT_GRACE)
+    .min(MAX_PLAYBACK_TIMEOUT)
 }
 
 fn schedule_retry(
@@ -310,6 +339,169 @@ async fn stop_audio_with_timeout(state: &AppState) {
             timeout_ms = AUDIO_STOP_TIMEOUT.as_millis(),
             "automatic transition audio stop watchdog expired"
         ),
+    }
+}
+
+async fn play_transition_at_boundary(
+    app: &AppHandle,
+    mut prepared: PreparedAudio,
+    initial_playback: PlaybackState,
+    key: TransitionKey,
+) -> Result<SpeechResultView, AppError> {
+    let remaining = remaining_ms(&initial_playback).ok_or(AppError::StaleJob)?;
+    let delay = Duration::from_millis(remaining.saturating_sub(PAUSE_COMMAND_LEAD_MS));
+    tokio::select! {
+        () = tokio::time::sleep(delay) => {}
+        () = prepared.cancellation.cancelled() => return Err(AppError::Cancelled),
+    }
+
+    let state = app.state::<AppState>();
+    state
+        .coordinator
+        .write()
+        .await
+        .transition(crate::rj_engine::BroadcastState::PausingMusic);
+    let settings = state.settings.read().await.clone();
+    let provider = spotify_provider(&settings, state.credential_store.clone())?;
+    let device_id = initial_playback
+        .device
+        .as_ref()
+        .and_then(|device| device.id.clone());
+    let interruption = PlaybackInterruption {
+        device_id: device_id.clone(),
+    };
+    *state.spotify_interruption.write().await = Some(interruption.clone());
+
+    if let Err(error) = provider.pause(device_id.as_deref()).await {
+        if !matches!(
+            &error,
+            crate::music_provider::MusicProviderError::Timeout
+                | crate::music_provider::MusicProviderError::Unavailable
+        ) {
+            clear_spotify_interruption(&state, &interruption).await;
+        }
+        let pause_error = AppError::Provider(error.to_string());
+        resume_spotify_if_interrupted(&state, &settings).await;
+        return Err(pause_error);
+    }
+    tracing::info!("automatic transition paused Spotify");
+
+    let paused = provider
+        .playback_state()
+        .await
+        .map_err(|error| AppError::Provider(error.to_string()));
+    let paused = match paused {
+        Ok(paused) => paused,
+        Err(error) => {
+            resume_spotify_if_interrupted(&state, &settings).await;
+            return Err(error);
+        }
+    };
+    let paused_track_id = paused
+        .current_track
+        .as_ref()
+        .map(|track| track.provider_id.as_str());
+    if paused_track_id == Some(key.current_track_id.as_str()) {
+        if let Err(error) = provider.skip(device_id.as_deref()).await {
+            let skip_error = AppError::Provider(error.to_string());
+            resume_spotify_if_interrupted(&state, &settings).await;
+            return Err(skip_error);
+        }
+        tracing::info!("automatic transition advanced Spotify while paused");
+    } else if paused_track_id != Some(key.next_track_id.as_str()) {
+        resume_spotify_if_interrupted(&state, &settings).await;
+        return Err(AppError::StaleJob);
+    }
+
+    if let Err(error) = wait_for_track_handoff(&provider, &key.next_track_id).await {
+        resume_spotify_if_interrupted(&state, &settings).await;
+        return Err(error);
+    }
+    tracing::info!("automatic transition confirmed the next Spotify track");
+    if let Err(error) = provider.seek(0, device_id.as_deref()).await {
+        let seek_error = AppError::Provider(error.to_string());
+        resume_spotify_if_interrupted(&state, &settings).await;
+        return Err(seek_error);
+    }
+    tracing::info!("automatic transition reset the next Spotify track");
+
+    let handoff_result = state
+        .coordinator
+        .write()
+        .await
+        .handoff_to_next(&prepared.job_id, &key.next_track_id);
+    if let Err(error) = handoff_result {
+        resume_spotify_if_interrupted(&state, &settings).await;
+        return Err(error);
+    }
+    prepared.track_provider_id = key.next_track_id;
+    tracing::info!("automatic transition is playing RJ audio");
+    let speech_result = play_prepared_audio(&state, prepared).await;
+    let resume_result = try_resume_spotify(&state, &settings).await;
+    match (speech_result, resume_result) {
+        (_, Err(resume_error)) => Err(resume_error),
+        (Err(speech_error), Ok(())) => Err(speech_error),
+        (Ok(speech), Ok(())) => Ok(speech),
+    }
+}
+
+async fn wait_for_track_handoff(
+    provider: &impl MusicProvider,
+    expected_track_id: &str,
+) -> Result<(), AppError> {
+    for attempt in 0..TRACK_HANDOFF_ATTEMPTS {
+        let playback = provider
+            .playback_state()
+            .await
+            .map_err(|error| AppError::Provider(error.to_string()))?;
+        if playback
+            .current_track
+            .as_ref()
+            .is_some_and(|track| track.provider_id == expected_track_id)
+        {
+            return Ok(());
+        }
+        if attempt + 1 < TRACK_HANDOFF_ATTEMPTS {
+            tokio::time::sleep(TRACK_HANDOFF_POLL).await;
+        }
+    }
+    Err(AppError::StaleJob)
+}
+
+async fn resume_spotify_if_interrupted(state: &AppState, settings: &AppSettings) {
+    if let Err(error) = try_resume_spotify(state, settings).await {
+        tracing::warn!(error = %error, "Spotify resume is pending after commentary interruption");
+    }
+}
+
+async fn try_resume_spotify(state: &AppState, settings: &AppSettings) -> Result<(), AppError> {
+    let Some(interruption) = state.spotify_interruption.read().await.clone() else {
+        return Ok(());
+    };
+    state
+        .coordinator
+        .write()
+        .await
+        .transition(crate::rj_engine::BroadcastState::ResumingMusic);
+    let provider = spotify_provider(settings, state.credential_store.clone())?;
+    provider
+        .resume(interruption.device_id.as_deref())
+        .await
+        .map_err(|error| AppError::Provider(error.to_string()))?;
+    clear_spotify_interruption(state, &interruption).await;
+    state
+        .coordinator
+        .write()
+        .await
+        .transition(crate::rj_engine::BroadcastState::Monitoring);
+    tracing::info!("Spotify playback resumed after commentary");
+    Ok(())
+}
+
+async fn clear_spotify_interruption(state: &AppState, expected: &PlaybackInterruption) {
+    let mut active = state.spotify_interruption.write().await;
+    if active.as_ref() == Some(expected) {
+        *active = None;
     }
 }
 
@@ -356,12 +548,14 @@ enum PreparationSettlement {
     Failed,
 }
 
-async fn settle_playback(task: &mut Option<WatchedTask<Result<SpeechResultView, AppError>>>) {
+async fn settle_playback(
+    task: &mut Option<WatchedTask<Result<SpeechResultView, AppError>>>,
+) -> bool {
     if !task.as_ref().is_some_and(|task| task.handle.is_finished()) {
-        return;
+        return false;
     }
     let Some(completed) = task.take() else {
-        return;
+        return false;
     };
     match completed.handle.await {
         Ok(Ok(_)) => tracing::info!("automatic transition playback completed"),
@@ -372,6 +566,7 @@ async fn settle_playback(task: &mut Option<WatchedTask<Result<SpeechResultView, 
         Err(error) if error.is_cancelled() => {}
         Err(error) => tracing::warn!(error = %error, "automatic transition playback task failed"),
     }
+    true
 }
 
 fn abort_task<T>(task: &mut Option<WatchedTask<T>>) {
@@ -414,16 +609,16 @@ mod tests {
     }
 
     #[test]
-    fn schedules_audio_to_finish_at_the_track_boundary() {
-        assert!(!should_play(&playback(190_000, 200_000), Some(4_000)));
-        assert!(should_play(&playback(195_000, 200_000), Some(4_000)));
+    fn arms_the_interruption_close_to_the_track_boundary() {
+        assert!(!should_start_transition(&playback(190_000, 200_000)));
+        assert!(should_start_transition(&playback(195_000, 200_000)));
     }
 
     #[test]
     fn invalid_progress_does_not_trigger_automation() {
         let invalid = playback(201_000, 200_000);
         assert!(!should_prepare(&invalid));
-        assert!(!should_play(&invalid, Some(4_000)));
+        assert!(!should_start_transition(&invalid));
     }
 
     #[test]
@@ -442,7 +637,13 @@ mod tests {
 
     #[test]
     fn playback_watchdog_is_bounded() {
-        assert_eq!(playback_timeout(Some(4_000)), Duration::from_secs(24));
-        assert_eq!(playback_timeout(Some(u64::MAX)), MAX_PLAYBACK_TIMEOUT);
+        assert_eq!(
+            transition_timeout(Some(5_000), Some(4_000)),
+            Duration::from_secs(29)
+        );
+        assert_eq!(
+            transition_timeout(Some(u64::MAX), Some(u64::MAX)),
+            MAX_PLAYBACK_TIMEOUT
+        );
     }
 }

@@ -12,9 +12,9 @@ The application currently supports:
 - unattended, cache-first MusicBrainz first-release metadata with conservative matching;
 - English Kokoro synthesis in-process through Sherpa-ONNX, or an explicitly user-started Parler-TTS Mini loopback provider;
 - validated WAV playback on the Windows default audio device; and
-- opt-in automatic transition speech that pre-generates and pre-renders one spoken segment for every stable current/next track pair.
+- opt-in automatic transition speech that pre-generates one segment, pauses Spotify at the handoff, plays the RJ alone, and resumes the next track from its beginning.
 
-Sanymar does not currently pause, duck, resume, or otherwise control Spotify during commentary. Automatic speech plays over the music near the reported track boundary.
+Sanymar never mixes RJ speech over Spotify. In automatic mode it uses device-targeted pause, skip, seek, and resume commands so commentary plays separately between songs.
 
 ## Architecture
 
@@ -78,7 +78,7 @@ Keep the portable `.exe` together with `onnxruntime.dll`, `onnxruntime_providers
 
 Sanymar reads the current track, progress, active device, and queue. It does not download music. Access and refresh tokens are stored in Windows Credential Manager, never SQLite, `.env`, logs, or frontend storage. Disconnecting Spotify removes the stored credential.
 
-The authorization currently includes playback-control scope, but this phase only observes playback. Sanymar does not invoke Spotify pause, resume, or skip during automatic commentary.
+The authorization includes `user-modify-playback-state`. Automatic commentary uses it only for device-targeted pause, expected-track advancement, seek-to-start, and resume around the prepared RJ segment; it does not expose general playback controls.
 
 ## Local Ollama setup
 
@@ -145,11 +145,11 @@ Automatic transition speech requires live Spotify playback and a real TTS provid
 2. Enable **Automatically prepare and play speech at Spotify transitions** in **Settings**, then save.
 3. Keep Sanymar running with an active Spotify device and a known queued track.
 
-For every stable current/next track pair, a Rust background service generates one spoken segment immediately, synthesizes and validates its WAV ahead of time, then holds that artifact until its measured duration fits the closing seconds of the current track. Automatic mode requires a spoken segment rather than editorial silence. Recent segment, fact, and opening memory still limits repetition.
+For every stable current/next track pair, a Rust background service generates one spoken segment immediately, synthesizes and validates its WAV ahead of time, then arms a transition near the reported end of the current track. It sends pause slightly ahead of the reported boundary to account for command latency, advances the outgoing track if necessary, rewinds the expected next track, plays the RJ WAV alone, and resumes Spotify. Automatic mode requires a spoken segment rather than editorial silence. Recent segment, fact, and opening memory still limits repetition.
 
 The service is supervised and uses watchdog deadlines around Spotify polling, script/TTS preparation, audio stopping, and playback. A failed or timed-out preparation receives one cooldown retry for the same track pair; after that, the pair is skipped safely and the next stable pair starts with a fresh attempt budget. If the scheduler task itself fails, it is cleaned up and restarted automatically.
 
-A current-track or queue change cancels generation, synthesis, or playback and rejects stale artifacts. Timing uses Spotify's polled progress and the WAV duration, so fast skips, queue edits, provider latency, or network jitter can cancel a slot. Commentary overlaps the music because pause, duck, and resume are not implemented.
+A current-track or queue change cancels stale generation, synthesis, or speech, except for the expected handoff into the prepared next track. A recorded interruption is resumed after success, failure, cancellation, watchdog expiry, or worker restart. Timing uses Spotify's polled progress and Web API commands, so a small part of the outgoing tail may be trimmed or the next track may be briefly audible before reset.
 
 **Generate with Ollama** and **Speak test segment** remain available as manual diagnostics.
 
@@ -207,6 +207,6 @@ AGENTS.md                 Rules for coding agents
 
 ## Known limitations
 
-Sanymar schedules commentary near Spotify track boundaries but does not control the music transition. Voice overlaps active music because pause, duck, and resume are not implemented. Timing is approximate. Scheduler watchdogs recover stalled application tasks, but a cancelled native inference call may take a short time to stop cooperatively.
+Sanymar uses Spotify pause, skip, seek, and resume around commentary, but the Web API is not sample-accurate and does not guarantee command ordering with other Player endpoints. Timing is approximate. Scheduler watchdogs recover stalled application tasks, but force-closing the process while Spotify is paused can still require manual playback recovery.
 
 Output-device selection, WAV cache cleanup, code signing, public redistribution review, release automation, and desktop end-to-end tests are unfinished. Script validation is defensive but cannot guarantee factual correctness or human-quality delivery. See [Known limitations](docs/KNOWN_LIMITATIONS.md) for the complete list.

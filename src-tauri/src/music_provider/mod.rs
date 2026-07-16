@@ -81,6 +81,11 @@ pub struct PlaybackState {
     pub device: Option<PlaybackDevice>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaybackInterruption {
+    pub device_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthenticationStatus {
@@ -114,9 +119,14 @@ pub trait MusicProvider: Send + Sync {
     async fn authenticate(&self) -> Result<(), MusicProviderError>;
     async fn authentication_status(&self) -> Result<AuthenticationStatus, MusicProviderError>;
     async fn playback_state(&self) -> Result<PlaybackState, MusicProviderError>;
-    async fn pause(&self) -> Result<(), MusicProviderError>;
-    async fn resume(&self) -> Result<(), MusicProviderError>;
-    async fn skip(&self) -> Result<(), MusicProviderError>;
+    async fn pause(&self, device_id: Option<&str>) -> Result<(), MusicProviderError>;
+    async fn resume(&self, device_id: Option<&str>) -> Result<(), MusicProviderError>;
+    async fn seek(
+        &self,
+        position_ms: u64,
+        device_id: Option<&str>,
+    ) -> Result<(), MusicProviderError>;
+    async fn skip(&self, device_id: Option<&str>) -> Result<(), MusicProviderError>;
     async fn refresh_authentication(&self) -> Result<(), MusicProviderError>;
 }
 

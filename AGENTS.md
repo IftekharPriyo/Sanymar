@@ -2,7 +2,7 @@
 
 ## Purpose and phase
 
-Sanymar is a local-first Windows desktop AI radio jockey. The current phase includes the reviewable foundation, read-only Spotify playback through PKCE, optional local Ollama generation, unattended confidence-gated MusicBrainz metadata, optional English Kokoro or Parler-TTS Mini synthesis, default-device voice playback, and opt-in pre-rendered transition speech. Automated Spotify music control is not implemented. Provider modes remain independently selectable; preserve all offline mocks.
+Sanymar is a local-first Windows desktop AI radio jockey. The current phase includes the reviewable foundation, Spotify playback monitoring through PKCE, optional local Ollama generation, unattended confidence-gated MusicBrainz metadata, optional English Kokoro or Parler-TTS Mini synthesis, default-device voice playback, and opt-in pre-rendered transition speech with recovery-aware pause/skip/seek/resume. General Spotify controls are not exposed. Provider modes remain independently selectable; preserve all offline mocks.
 
 Before changing code, read this file, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, and the relevant module. Project-focused references live in `.agents/skills/` even if the active agent does not discover them automatically.
 
@@ -61,7 +61,7 @@ Run formatting, linting, tests, and compilation checks appropriate to a change. 
 - TTS models are explicit user-managed assets. Never auto-download a model, accept voice cloning/reference audio, or write generated audio outside the application cache.
 - Keep TTS delivery intent typed and provider-neutral. Preserve the user's selected voice, bound adapter-specific prosody controls, and do not describe pacing-only Kokoro output as genuine emotion synthesis.
 - Parler is an explicitly user-started, loopback-only provider process. The application must never launch or manage Python, accept reference audio, expose arbitrary descriptions, or download the model. Keep its request surface allowlisted and its returned audio bounded and validated.
-- Native audio may play only validated local artifacts from internal providers. Preserve cancellation and never treat output-device playback as authorization to control Spotify.
+- Native audio may play only validated local artifacts from internal providers. Spotify pause/skip/seek/resume is authorized only by the explicit automatic-transition setting, must target the observed device, must never overlap audio, and must retain resume recovery.
 - Add all schema changes as new SQLx migration files. Do not edit migrations after shared use.
 - Ask before destructive migrations. Do not store duplicated provider payloads without justification.
 

@@ -212,9 +212,9 @@ export function SettingsPage() {
         </label>
         <p className="fine-print">
           Sanymar prepares dialogue and voice when the current and next songs
-          are known, then plays it over the closing seconds. Automatic mode
-          speaks at every stable transition; Spotify pause and resume are not
-          controlled yet.
+          are known. Near the boundary it pauses and resets the next Spotify
+          track, plays the RJ alone, then resumes the song from its beginning.
+          Automatic mode speaks at every stable transition.
         </p>
         <label>
           Talk frequency

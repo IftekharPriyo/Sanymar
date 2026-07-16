@@ -1,8 +1,8 @@
 # Known limitations
 
 - Spotify PKCE account authorization and Windows token storage are implemented, but have not yet been verified with the user's Spotify application.
-- Spotify refresh and read-only playback/queue normalization are implemented, but live responses still require user verification across account/device states.
-- The adapter defines pause/resume/skip operations, but the UI intentionally does not invoke them until transition recovery and stale-job integration are tested.
+- Spotify refresh, playback/queue normalization, and automatic device-targeted pause/skip/seek/resume are implemented, but live behavior still requires user verification across Premium account and device states.
+- General pause/resume/skip controls are not exposed. Playback control is limited to the explicitly enabled automatic commentary handoff.
 - Live mode observes only Spotify track items; episodes and other item types are ignored.
 - MusicBrainz currently contributes only strongly matched first-release-date metadata; it does not provide recording stories, song meanings, chart history, or other narrative facts.
 - Ollama generation and health checks are implemented for loopback HTTP endpoints, but model quality and JSON-schema compliance vary by installed model.
@@ -13,13 +13,13 @@
 - Kokoro speech plays through the OS default output device only. The saved `audioOutputDevice` setting remains inactive; enumeration, hot-plug recovery, and explicit device selection are not implemented.
 - Kokoro combines speech-first script rhythm with bounded pacing but still does not provide genuine semantic emotion, pitch, or emphasis control. Script shaping improves naturalness but cannot guarantee a human performance. Parler-TTS Mini is more expressive, but its performance and delivery are model-dependent and it requires a manually started Python/PyTorch loopback service and a capable local GPU.
 - Parler's model has a long cold start and local tests measured roughly 1.30-1.53 real-time factor on the current machine. Sanymar cancels and rejects stale client results immediately when the track changes, but an inference already executing in the single-worker provider can continue using the GPU until that generation finishes.
-- Automatic transition speech relies on Spotify's polled progress and estimated WAV duration. It aims to finish near the boundary but may start early or be cancelled on a fast skip, delayed provider response, network jitter, or queue change.
-- Spotify is not paused or ducked while voice plays, so manual and automatic speech overlap active music. Pause/resume requires separately tested transition recovery before Sanymar may control playback.
+- Automatic transition speech relies on Spotify's polled progress and non-atomic Web API commands. Sanymar sends pause slightly before the estimated boundary to compensate for request latency, so a small part of the outgoing tail may be trimmed; under higher latency, the next track may still be audible briefly before reset. Fast skips, queue edits, device transfers, rate limits, or network jitter can cancel a slot.
+- Sanymar records a pause interruption and retries resume through normal scheduler recovery, but force-closing or crashing the entire process while Spotify is paused cannot run that recovery; playback may need to be resumed manually.
 - Kokoro model assets are not bundled or managed. The user must install them explicitly, and corrupted/incompatible models may emit native-library diagnostics during health checks.
 - Generated WAV cache cleanup is not implemented yet. Windows packages include the pinned Sherpa/ONNX Runtime DLLs beside the executable, but third-party notice and redistribution review is still required before public distribution. Kokoro/Parler model assets, Parler, and Python are not bundled.
 - Synthesis cancellation is cooperative through Sherpa's progress callback; a native inference call may take a short time to return after cancellation.
 - Automatic transition watchdogs release stalled scheduler state and restart a failed worker, but Rust cannot forcibly terminate a native inference thread. A cancelled native call may briefly continue in the background, and a repeatedly unavailable provider can still cause the current pair to be skipped after its bounded retry.
-- Transition speech scheduling is implemented, but automated music transitions and recovery-aware Spotify pause/resume remain unimplemented.
+- Transition speech uses recovery-aware Spotify pause/skip/seek/resume. Crossfade control, sample-accurate timing, ducking, overlapping audio, and arbitrary player controls are intentionally not implemented.
 - Script validation is heuristic and cannot guarantee factual accuracy.
 - Cancellation aborts the client request when dashboard polling observes a changed active track; detection is limited by the polling interval and Ollama may briefly continue server-side computation after the client disconnects.
 - Database deletion/retention UI remains future work. Spotify disconnect deletes its Windows Credential Manager entry.

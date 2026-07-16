@@ -51,8 +51,20 @@ impl BroadcastCoordinator {
         next_track_id: Option<&str>,
     ) -> bool {
         let changed = self.active_job.as_ref().is_some_and(|job| {
-            job.current_track_id != current_track_id
-                || job.next_track_id.as_deref() != next_track_id
+            let expected_handoff = job.next_track_id.as_deref() == Some(current_track_id)
+                && matches!(
+                    self.state,
+                    BroadcastState::WaitingForTransition
+                        | BroadcastState::PausingMusic
+                        | BroadcastState::Speaking
+                        | BroadcastState::ResumingMusic
+                );
+            !expected_handoff
+                && (job.current_track_id != current_track_id
+                    || job
+                        .next_track_id
+                        .as_deref()
+                        .is_some_and(|expected| Some(expected) != next_track_id))
         });
         if changed {
             if let Some(token) = self.cancellation.take() {
@@ -62,6 +74,16 @@ impl BroadcastCoordinator {
             self.transition(BroadcastState::Cancelled);
         }
         changed
+    }
+
+    pub fn handoff_to_next(&mut self, job_id: &str, next_track_id: &str) -> Result<(), AppError> {
+        let job = self.active_job.as_mut().ok_or(AppError::StaleJob)?;
+        if job.job_id != job_id || job.next_track_id.as_deref() != Some(next_track_id) {
+            return Err(AppError::StaleJob);
+        }
+        job.current_track_id = next_track_id.to_owned();
+        job.next_track_id = None;
+        Ok(())
     }
 
     pub fn cancel(&mut self) -> bool {
@@ -129,5 +151,20 @@ mod tests {
         assert!(coordinator.cancel_if_playback_changed("track-a", Some("track-c")));
         assert!(cancellation.is_cancelled());
         assert_eq!(coordinator.state(), &BroadcastState::Cancelled);
+    }
+
+    #[test]
+    fn expected_track_handoff_remains_valid_during_transition() {
+        let mut coordinator = BroadcastCoordinator::default();
+        coordinator.start(CommentaryJob {
+            job_id: "job-a".into(),
+            current_track_id: "track-a".into(),
+            next_track_id: Some("track-b".into()),
+        });
+        coordinator.transition(BroadcastState::PausingMusic);
+
+        assert!(!coordinator.cancel_if_playback_changed("track-b", Some("track-c")));
+        assert!(coordinator.handoff_to_next("job-a", "track-b").is_ok());
+        assert!(coordinator.ensure_current("job-a", "track-b").is_ok());
     }
 }

@@ -22,7 +22,9 @@ use crate::{
         musicbrainz::{MusicBrainzFactProvider, MusicBrainzRateLimiter},
         MusicFact, MusicFactError, MusicFactProvider,
     },
-    music_provider::{Album, Artist, MusicProvider, PlaybackState, Track, TrackVariant},
+    music_provider::{
+        Album, Artist, MusicProvider, PlaybackInterruption, PlaybackState, Track, TrackVariant,
+    },
     playback::CommentaryJob,
     rj_engine::{
         normalize_for_speech, BroadcastCoordinator, BroadcastMemory, BroadcastState,
@@ -58,6 +60,7 @@ pub struct AppState {
     pub(crate) memory: RwLock<BroadcastMemory>,
     pub(crate) recent_script: RwLock<Option<PreparedScript>>,
     pub(crate) audio: LocalAudioRouter,
+    pub(crate) spotify_interruption: RwLock<Option<PlaybackInterruption>>,
     pub(crate) spotify_auth: SpotifyAuthService,
     pub(crate) credential_store: Arc<dyn CredentialStore>,
     pub(crate) musicbrainz_rate_limiter: Arc<MusicBrainzRateLimiter>,
@@ -77,6 +80,7 @@ impl AppState {
             memory: RwLock::new(BroadcastMemory::default()),
             recent_script: RwLock::new(None),
             audio: LocalAudioRouter::default(),
+            spotify_interruption: RwLock::new(None),
             spotify_auth,
             credential_store,
             musicbrainz_rate_limiter: Arc::new(MusicBrainzRateLimiter::default()),

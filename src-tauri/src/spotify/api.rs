@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
-use reqwest::{Method, StatusCode};
+use reqwest::{header::CONTENT_LENGTH, Method, StatusCode};
 use serde::Deserialize;
 
 use crate::{
@@ -23,6 +23,7 @@ pub struct SpotifyProvider {
     configuration: SpotifyConfiguration,
     credential_store: Arc<dyn CredentialStore>,
     client: reqwest::Client,
+    api_base: String,
 }
 
 #[derive(Deserialize)]
@@ -113,7 +114,14 @@ impl SpotifyProvider {
             configuration,
             credential_store,
             client,
+            api_base: API_BASE.into(),
         })
+    }
+
+    #[cfg(test)]
+    fn with_api_base(mut self, api_base: String) -> Self {
+        self.api_base = api_base;
+        self
     }
 
     async fn credential(&self) -> Result<Credential, MusicProviderError> {
@@ -203,12 +211,16 @@ impl SpotifyProvider {
         path: &str,
         access_token: &str,
     ) -> Result<reqwest::Response, MusicProviderError> {
-        self.client
-            .request(method.clone(), format!("{API_BASE}{path}"))
-            .bearer_auth(access_token)
-            .send()
-            .await
-            .map_err(map_transport_error)
+        let request = self
+            .client
+            .request(method.clone(), format!("{}{path}", self.api_base))
+            .bearer_auth(access_token);
+        let request = if method == Method::GET {
+            request
+        } else {
+            request.header(CONTENT_LENGTH, 0).body(Vec::new())
+        };
+        request.send().await.map_err(map_transport_error)
     }
 
     async fn send_with_read_retry(
@@ -234,8 +246,35 @@ impl SpotifyProvider {
         if response.status().is_success() {
             Ok(())
         } else {
+            tracing::warn!(
+                status = response.status().as_u16(),
+                "Spotify playback control request was rejected"
+            );
             Err(map_status(response.status()))
         }
+    }
+
+    fn player_control_path(
+        operation: &str,
+        parameters: &[(&str, String)],
+        device_id: Option<&str>,
+    ) -> Result<String, MusicProviderError> {
+        if device_id.is_some_and(str::is_empty) {
+            return Err(MusicProviderError::ControlUnavailable);
+        }
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        for (key, value) in parameters {
+            query.append_pair(key, value);
+        }
+        if let Some(device_id) = device_id {
+            query.append_pair("device_id", device_id);
+        }
+        let query = query.finish();
+        Ok(if query.is_empty() {
+            format!("/me/player/{operation}")
+        } else {
+            format!("/me/player/{operation}?{query}")
+        })
     }
 }
 
@@ -299,16 +338,32 @@ impl MusicProvider for SpotifyProvider {
         })
     }
 
-    async fn pause(&self) -> Result<(), MusicProviderError> {
-        self.control(Method::PUT, "/me/player/pause").await
+    async fn pause(&self, device_id: Option<&str>) -> Result<(), MusicProviderError> {
+        let path = Self::player_control_path("pause", &[], device_id)?;
+        self.control(Method::PUT, &path).await
     }
 
-    async fn resume(&self) -> Result<(), MusicProviderError> {
-        self.control(Method::PUT, "/me/player/play").await
+    async fn resume(&self, device_id: Option<&str>) -> Result<(), MusicProviderError> {
+        let path = Self::player_control_path("play", &[], device_id)?;
+        self.control(Method::PUT, &path).await
     }
 
-    async fn skip(&self) -> Result<(), MusicProviderError> {
-        self.control(Method::POST, "/me/player/next").await
+    async fn seek(
+        &self,
+        position_ms: u64,
+        device_id: Option<&str>,
+    ) -> Result<(), MusicProviderError> {
+        let path = Self::player_control_path(
+            "seek",
+            &[("position_ms", position_ms.to_string())],
+            device_id,
+        )?;
+        self.control(Method::PUT, &path).await
+    }
+
+    async fn skip(&self, device_id: Option<&str>) -> Result<(), MusicProviderError> {
+        let path = Self::player_control_path("next", &[], device_id)?;
+        self.control(Method::POST, &path).await
     }
 
     async fn refresh_authentication(&self) -> Result<(), MusicProviderError> {
@@ -394,7 +449,10 @@ fn map_transport_error(error: reqwest::Error) -> MusicProviderError {
 fn map_status(status: StatusCode) -> MusicProviderError {
     match status {
         StatusCode::UNAUTHORIZED => MusicProviderError::AuthenticationExpired,
-        StatusCode::FORBIDDEN => MusicProviderError::ControlUnavailable,
+        StatusCode::BAD_REQUEST
+        | StatusCode::FORBIDDEN
+        | StatusCode::NOT_FOUND
+        | StatusCode::LENGTH_REQUIRED => MusicProviderError::ControlUnavailable,
         StatusCode::TOO_MANY_REQUESTS => MusicProviderError::RateLimited,
         status if status.is_server_error() => MusicProviderError::Unavailable,
         _ => MusicProviderError::MalformedResponse,
@@ -418,10 +476,21 @@ fn should_retry_read(
 
 #[cfg(test)]
 mod tests {
-    use reqwest::StatusCode;
+    use std::sync::Arc;
 
-    use super::{map_status, normalize_track, should_retry_read, SpotifyItem};
-    use crate::music_provider::{MusicProviderError, TrackVariant};
+    use chrono::{Duration as ChronoDuration, Utc};
+    use reqwest::StatusCode;
+    use wiremock::{
+        matchers::{header, method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    use super::{map_status, normalize_track, should_retry_read, SpotifyItem, SpotifyProvider};
+    use crate::{
+        music_provider::{MusicProvider, MusicProviderError, TrackVariant},
+        security::{mock::InMemoryCredentialStore, Credential, CredentialStore},
+        spotify::SpotifyConfiguration,
+    };
 
     #[test]
     fn ignores_non_track_queue_items() {
@@ -494,5 +563,67 @@ mod tests {
             Some(StatusCode::TOO_MANY_REQUESTS),
             None
         ));
+    }
+
+    #[tokio::test]
+    async fn sends_device_targeted_pause_seek_and_resume_commands() {
+        let server = MockServer::start().await;
+        for operation in ["pause", "play"] {
+            Mock::given(method("PUT"))
+                .and(path(format!("/me/player/{operation}")))
+                .and(query_param("device_id", "studio device"))
+                .and(header("authorization", "Bearer test-token"))
+                .and(header("content-length", "0"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("POST"))
+            .and(path("/me/player/next"))
+            .and(query_param("device_id", "studio device"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(header("content-length", "0"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/me/player/seek"))
+            .and(query_param("position_ms", "0"))
+            .and(query_param("device_id", "studio device"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(header("content-length", "0"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let store = Arc::new(InMemoryCredentialStore::default());
+        store
+            .save(
+                "spotify",
+                Credential {
+                    access_token: "test-token".into(),
+                    refresh_token: None,
+                    expires_at: Some(Utc::now() + ChronoDuration::hours(1)),
+                    scopes: vec!["user-modify-playback-state".into()],
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("credential fixture failed: {error}"));
+        let provider = SpotifyProvider::new(
+            SpotifyConfiguration {
+                client_id: "client".into(),
+                redirect_uri: "http://127.0.0.1:43821/callback".into(),
+            },
+            store,
+        )
+        .unwrap_or_else(|error| panic!("provider fixture failed: {error}"))
+        .with_api_base(server.uri());
+
+        assert!(provider.pause(Some("studio device")).await.is_ok());
+        assert!(provider.skip(Some("studio device")).await.is_ok());
+        assert!(provider.seek(0, Some("studio device")).await.is_ok());
+        assert!(provider.resume(Some("studio device")).await.is_ok());
     }
 }

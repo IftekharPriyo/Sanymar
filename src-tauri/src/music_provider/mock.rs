@@ -34,17 +34,26 @@ impl MusicProvider for MockMusicProvider {
         Ok(self.playback.read().await.clone())
     }
 
-    async fn pause(&self) -> Result<(), MusicProviderError> {
+    async fn pause(&self, _device_id: Option<&str>) -> Result<(), MusicProviderError> {
         self.playback.write().await.is_playing = false;
         Ok(())
     }
 
-    async fn resume(&self) -> Result<(), MusicProviderError> {
+    async fn resume(&self, _device_id: Option<&str>) -> Result<(), MusicProviderError> {
         self.playback.write().await.is_playing = true;
         Ok(())
     }
 
-    async fn skip(&self) -> Result<(), MusicProviderError> {
+    async fn seek(
+        &self,
+        position_ms: u64,
+        _device_id: Option<&str>,
+    ) -> Result<(), MusicProviderError> {
+        self.playback.write().await.progress_ms = position_ms;
+        Ok(())
+    }
+
+    async fn skip(&self, _device_id: Option<&str>) -> Result<(), MusicProviderError> {
         let mut playback = self.playback.write().await;
         playback.current_track = playback.next_track.take();
         playback.progress_ms = 0;
