@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::errors::AppError;
 
 pub const SPOTIFY_REDIRECT_URI: &str = "http://127.0.0.1:43821/callback";
+pub const SPOTIFY_CLIENT_ID: &str = "4e4bff1fbd0b4999b83362432916a872";
 const LEGACY_SPOTIFY_REDIRECT_URI: &str = "http://127.0.0.1:43821/oauth/callback";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,6 +25,8 @@ pub enum TtsProviderSetting {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default)]
+    pub settings_version: u16,
     pub mock_mode: bool,
     pub spotify_client_id: Option<String>,
     pub spotify_redirect_uri: String,
@@ -46,6 +49,8 @@ pub struct AppSettings {
     pub tts_voice_id: u16,
     #[serde(default = "default_tts_speed_percent")]
     pub tts_speed_percent: u16,
+    #[serde(default = "default_tts_volume_percent")]
+    pub tts_volume_percent: u16,
     #[serde(default = "default_parler_base_url")]
     pub parler_base_url: String,
     #[serde(default = "default_parler_speaker")]
@@ -56,8 +61,9 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            settings_version: CURRENT_SETTINGS_VERSION,
             mock_mode: true,
-            spotify_client_id: None,
+            spotify_client_id: Some(SPOTIFY_CLIENT_ID.into()),
             spotify_redirect_uri: SPOTIFY_REDIRECT_URI.into(),
             ollama_base_url: "http://127.0.0.1:11434".into(),
             ollama_model: None,
@@ -73,6 +79,7 @@ impl Default for AppSettings {
             tts_model_directory: None,
             tts_voice_id: 0,
             tts_speed_percent: default_tts_speed_percent(),
+            tts_volume_percent: default_tts_volume_percent(),
             parler_base_url: default_parler_base_url(),
             parler_speaker: default_parler_speaker(),
             audio_output_device: None,
@@ -82,6 +89,19 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub fn normalize_legacy_values(&mut self) {
+        if self.settings_version < CURRENT_SETTINGS_VERSION {
+            if !self.mock_mode {
+                self.tts_provider = TtsProviderSetting::SherpaKokoro;
+            }
+            self.settings_version = CURRENT_SETTINGS_VERSION;
+        }
+        if self
+            .spotify_client_id
+            .as_deref()
+            .is_none_or(|client_id| client_id.trim().is_empty())
+        {
+            self.spotify_client_id = Some(SPOTIFY_CLIENT_ID.into());
+        }
         if self.spotify_redirect_uri == LEGACY_SPOTIFY_REDIRECT_URI {
             self.spotify_redirect_uri = SPOTIFY_REDIRECT_URI.into();
         }
@@ -116,11 +136,9 @@ impl AppSettings {
                 "TTS speed must be between 50 and 200 percent".into(),
             ));
         }
-        if matches!(self.tts_provider, TtsProviderSetting::SherpaKokoro)
-            && self.tts_model_directory.is_none()
-        {
+        if self.tts_volume_percent > 100 {
             return Err(AppError::Configuration(
-                "select a Kokoro model directory before enabling Sherpa-ONNX TTS".into(),
+                "RJ volume must be between 0 and 100 percent".into(),
             ));
         }
         if self.tts_model_directory.as_ref().is_some_and(|directory| {
@@ -202,6 +220,12 @@ const fn default_tts_speed_percent() -> u16 {
     100
 }
 
+const CURRENT_SETTINGS_VERSION: u16 = 1;
+
+const fn default_tts_volume_percent() -> u16 {
+    75
+}
+
 fn default_parler_base_url() -> String {
     "http://127.0.0.1:43822".into()
 }
@@ -230,6 +254,49 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn defaults_to_a_quieter_rj_volume() {
+        assert_eq!(AppSettings::default().tts_volume_percent, 75);
+    }
+
+    #[test]
+    fn rejects_rj_volume_above_one_hundred_percent() {
+        let settings = AppSettings {
+            tts_volume_percent: 101,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn restores_the_packaged_spotify_client_id_for_legacy_settings() {
+        let mut settings = AppSettings {
+            spotify_client_id: None,
+            ..AppSettings::default()
+        };
+        settings.normalize_legacy_values();
+        assert_eq!(
+            settings.spotify_client_id.as_deref(),
+            Some(super::SPOTIFY_CLIENT_ID)
+        );
+    }
+
+    #[test]
+    fn upgrades_live_legacy_voice_settings_to_bundled_kokoro() {
+        let mut settings = AppSettings {
+            settings_version: 0,
+            mock_mode: false,
+            tts_provider: super::TtsProviderSetting::ParlerMini,
+            ..AppSettings::default()
+        };
+        settings.normalize_legacy_values();
+        assert_eq!(settings.settings_version, 1);
+        assert_eq!(
+            settings.tts_provider,
+            super::TtsProviderSetting::SherpaKokoro
+        );
     }
 
     #[test]
@@ -270,13 +337,20 @@ mod tests {
     }
 
     #[test]
-    fn sherpa_tts_requires_an_absolute_model_directory() {
+    fn optional_kokoro_override_requires_an_absolute_model_directory() {
         let settings = AppSettings {
             tts_provider: super::TtsProviderSetting::SherpaKokoro,
             tts_model_directory: Some("relative/model".into()),
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
+
+        let bundled = AppSettings {
+            tts_provider: super::TtsProviderSetting::SherpaKokoro,
+            tts_model_directory: None,
+            ..AppSettings::default()
+        };
+        assert!(bundled.validate().is_ok());
     }
 
     #[test]

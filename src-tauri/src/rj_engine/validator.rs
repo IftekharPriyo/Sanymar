@@ -49,7 +49,7 @@ impl ScriptValidator {
         }
         if recent_openings
             .iter()
-            .any(|opening| lower.starts_with(&opening.to_ascii_lowercase()))
+            .any(|opening| starts_with_recent_phrase(&lower, opening))
         {
             issues.push(ValidationIssue::RepeatedPhrase);
         }
@@ -98,6 +98,17 @@ impl ScriptValidator {
             issues,
         }
     }
+}
+
+fn starts_with_recent_phrase(dialogue: &str, opening: &str) -> bool {
+    let opening = opening.trim().to_ascii_lowercase();
+    if opening.split_whitespace().count() < 2 || !dialogue.starts_with(&opening) {
+        return false;
+    }
+    dialogue[opening.len()..]
+        .chars()
+        .next()
+        .is_none_or(|character| !character.is_alphanumeric())
 }
 
 fn contains_page_artifacts(dialogue: &str) -> bool {
@@ -177,5 +188,32 @@ mod tests {
                 .issues
                 .contains(&ValidationIssue::UnexpectedFormatting));
         }
+    }
+
+    #[test]
+    fn repetition_check_rejects_phrases_without_banning_common_first_words() {
+        let profile = DjProfile::default();
+        let recent = vec!["That bassline left".into(), "This one moves".into()];
+        let repeated = ScriptValidator::validate(
+            "That bassline left just enough space.",
+            42,
+            SegmentType::SimpleTransition,
+            0,
+            None,
+            &profile,
+            &recent,
+        );
+        assert!(repeated.issues.contains(&ValidationIssue::RepeatedPhrase));
+
+        let fresh = ScriptValidator::validate(
+            "That guitar lands with a different kind of weight.",
+            42,
+            SegmentType::SimpleTransition,
+            0,
+            None,
+            &profile,
+            &["That".into(), "That bassline left".into()],
+        );
+        assert!(!fresh.issues.contains(&ValidationIssue::RepeatedPhrase));
     }
 }

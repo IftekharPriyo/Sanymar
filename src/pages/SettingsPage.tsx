@@ -6,7 +6,6 @@ import type {
   OllamaStatus,
   TalkFrequency,
   TtsProvider,
-  TtsStatus,
 } from "../types/domain";
 
 function errorMessage(reason: unknown): string {
@@ -29,8 +28,6 @@ export function SettingsPage() {
   const [spotifyBusy, setSpotifyBusy] = useState(false);
   const [ollama, setOllama] = useState<OllamaStatus | null>(null);
   const [ollamaBusy, setOllamaBusy] = useState(false);
-  const [tts, setTts] = useState<TtsStatus | null>(null);
-  const [ttsBusy, setTtsBusy] = useState(false);
 
   useEffect(() => {
     void sanymarService.getSettings().then(setSettings);
@@ -59,7 +56,16 @@ export function SettingsPage() {
     try {
       const saved = await save();
       if (!saved) return;
-      setSpotify(await sanymarService.connectSpotify());
+      const status = await sanymarService.connectSpotify();
+      setSpotify(status);
+      if (status.connected) {
+        const liveSettings = await sanymarService.saveSettings({
+          ...saved,
+          mockMode: false,
+          ttsProvider: "sherpa_kokoro",
+        });
+        setSettings(liveSettings);
+      }
       setMessage(
         "Spotify connected. Tokens are stored in Windows Credential Manager.",
       );
@@ -75,9 +81,11 @@ export function SettingsPage() {
     setSpotifyBusy(true);
     try {
       setSpotify(await sanymarService.disconnectSpotify());
-      setSettings((current) =>
-        current ? { ...current, mockMode: true } : current,
-      );
+      const offlineSettings = await sanymarService.saveSettings({
+        ...settings,
+        mockMode: true,
+      });
+      setSettings(offlineSettings);
       setMessage("Spotify disconnected and its stored tokens were removed.");
       setError(null);
     } catch (reason) {
@@ -104,23 +112,6 @@ export function SettingsPage() {
     }
   };
 
-  const checkTts = async () => {
-    setTtsBusy(true);
-    setMessage(null);
-    try {
-      const saved = await save();
-      if (!saved) return;
-      const status = await sanymarService.getTtsStatus();
-      setTts(status);
-      setMessage(status.message);
-      setError(null);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setTtsBusy(false);
-    }
-  };
-
   return (
     <main className="settings-page">
       <p className="eyebrow">Local configuration</p>
@@ -143,28 +134,9 @@ export function SettingsPage() {
             {spotify?.connected ? "Connected" : "Not connected"}
           </span>
         </div>
-        <label>
-          Spotify Client ID
-          <input
-            autoComplete="off"
-            value={settings.spotifyClientId ?? ""}
-            placeholder="Paste the Client ID from Spotify for Developers"
-            onChange={(event) =>
-              setSettings({
-                ...settings,
-                spotifyClientId: event.target.value.trim() || null,
-              })
-            }
-          />
-        </label>
-        <label>
-          Registered redirect URI
-          <input value={settings.spotifyRedirectUri} readOnly />
-        </label>
         <p className="fine-print">
-          The Client ID is not secret. Do not enter a Spotify Client Secret.
-          Authorization uses PKCE, and tokens are kept in Windows Credential
-          Manager.
+          Connect in your browser. Sanymar keeps authorization tokens in Windows
+          Credential Manager and never displays them here.
         </p>
         <label className="checkbox-row">
           <input
@@ -180,7 +152,7 @@ export function SettingsPage() {
         <div className="actions">
           <button
             className="primary"
-            disabled={spotifyBusy || !settings.spotifyClientId}
+            disabled={spotifyBusy}
             onClick={() => void connectSpotify()}
           >
             {spotifyBusy ? "Waiting for Spotify…" : "Connect Spotify"}
@@ -331,97 +303,13 @@ export function SettingsPage() {
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Voice synthesis</p>
-            <h2>Local English voice</h2>
+            <h2>RJ voice</h2>
           </div>
-          <span
-            className={
-              tts?.health?.ready ? "connection-good" : "connection-muted"
-            }
-          >
-            {tts?.health?.ready ? "Ready" : "Not checked"}
-          </span>
         </div>
-        <label>
-          TTS provider
-          <select
-            value={settings.ttsProvider}
-            onChange={(event) =>
-              setSettings({
-                ...settings,
-                ttsProvider: event.target.value as TtsProvider,
-              })
-            }
-          >
-            <option value="mock">Mock TTS</option>
-            <option value="sherpa_kokoro">Sherpa-ONNX Kokoro</option>
-            <option value="parler_mini">Parler-TTS Mini local service</option>
-          </select>
-        </label>
-        {settings.ttsProvider === "sherpa_kokoro" && (
-          <>
-            <label>
-              Kokoro model directory
-              <input
-                value={settings.ttsModelDirectory ?? ""}
-                placeholder="Absolute path containing model.onnx and voices.bin"
-                onChange={(event) =>
-                  setSettings({
-                    ...settings,
-                    ttsModelDirectory: event.target.value.trim() || null,
-                  })
-                }
-              />
-            </label>
-            <label>
-              Kokoro voice ID
-              <input
-                type="number"
-                min="0"
-                value={settings.ttsVoiceId}
-                onChange={(event) =>
-                  setSettings({
-                    ...settings,
-                    ttsVoiceId: Number(event.target.value),
-                  })
-                }
-              />
-            </label>
-          </>
-        )}
-        {settings.ttsProvider === "parler_mini" && (
-          <>
-            <label>
-              Parler local service URL
-              <input
-                value={settings.parlerBaseUrl}
-                onChange={(event) =>
-                  setSettings({
-                    ...settings,
-                    parlerBaseUrl: event.target.value,
-                  })
-                }
-              />
-            </label>
-            <label>
-              Parler speaker
-              <select
-                value={settings.parlerSpeaker}
-                onChange={(event) =>
-                  setSettings({
-                    ...settings,
-                    parlerSpeaker: event.target.value,
-                  })
-                }
-              >
-                <option value="Jon">Jon</option>
-                <option value="Gary">Gary</option>
-                <option value="Mike">Mike</option>
-                <option value="Lea">Lea</option>
-                <option value="Jenna">Jenna</option>
-              </select>
-            </label>
-          </>
-        )}
+        <p className="fine-print">
+          Sanymar uses its bundled English voice automatically. No voice model,
+          service, or provider process needs to be configured.
+        </p>
         <label>
           Speech speed ({settings.ttsSpeedPercent}%)
           <input
@@ -437,31 +325,91 @@ export function SettingsPage() {
             }
           />
         </label>
-        <p className="fine-print">
-          {settings.ttsProvider === "parler_mini"
-            ? "The manually started loopback service keeps the user-installed Parler model loaded. No reference audio is accepted."
-            : "The Kokoro directory must contain model.onnx, voices.bin, tokens.txt, and espeak-ng-data."}{" "}
-          Sanymar never downloads voice models.
-          {tts?.health?.availableVoices != null &&
-            tts.health.sampleRate != null &&
-            " Provider reports " +
-              tts.health.availableVoices +
-              " voices at " +
-              tts.health.sampleRate +
-              " Hz."}
-        </p>
+        <label>
+          RJ volume ({settings.ttsVolumePercent}%)
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={settings.ttsVolumePercent}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                ttsVolumePercent: Number(event.target.value),
+              })
+            }
+          />
+        </label>
         <button
-          disabled={
-            ttsBusy ||
-            settings.ttsProvider === "mock" ||
-            (settings.ttsProvider === "sherpa_kokoro" &&
-              !settings.ttsModelDirectory) ||
-            (settings.ttsProvider === "parler_mini" && !settings.parlerBaseUrl)
+          type="button"
+          onClick={() =>
+            setSettings({
+              ...settings,
+              ttsVolumePercent: settings.ttsVolumePercent === 0 ? 75 : 0,
+            })
           }
-          onClick={() => void checkTts()}
         >
-          {ttsBusy ? "Checking voice provider..." : "Check voice provider"}
+          {settings.ttsVolumePercent === 0 ? "Restore RJ volume" : "Mute RJ"}
         </button>
+        <p className="fine-print">
+          RJ volume affects only generated speech, not Spotify playback or
+          Windows system volume.
+        </p>
+        {settings.debugLogging && (
+          <details>
+            <summary>Development voice override</summary>
+            <label>
+              Voice engine
+              <select
+                value={settings.ttsProvider}
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    ttsProvider: event.target.value as TtsProvider,
+                  })
+                }
+              >
+                <option value="mock">Silent mock</option>
+                <option value="sherpa_kokoro">Bundled Kokoro</option>
+                <option value="parler_mini">User-managed Parler</option>
+              </select>
+            </label>
+            {settings.ttsProvider === "parler_mini" && (
+              <>
+                <label>
+                  Parler local service URL
+                  <input
+                    value={settings.parlerBaseUrl}
+                    onChange={(event) =>
+                      setSettings({
+                        ...settings,
+                        parlerBaseUrl: event.target.value,
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Parler speaker
+                  <select
+                    value={settings.parlerSpeaker}
+                    onChange={(event) =>
+                      setSettings({
+                        ...settings,
+                        parlerSpeaker: event.target.value,
+                      })
+                    }
+                  >
+                    <option value="Jon">Jon</option>
+                    <option value="Gary">Gary</option>
+                    <option value="Mike">Mike</option>
+                    <option value="Lea">Lea</option>
+                    <option value="Jenna">Jenna</option>
+                  </select>
+                </label>
+              </>
+            )}
+          </details>
+        )}
       </section>
       <section className="panel settings-form">
         <label className="checkbox-row">

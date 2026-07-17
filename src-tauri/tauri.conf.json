@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm.cmd run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm.cmd run build",
+    "beforeBuildCommand": "npm.cmd run build:desktop",
     "frontendDist": "../dist"
   },
   "app": {
@@ -36,7 +36,8 @@
       "target/release/onnxruntime.dll": "onnxruntime.dll",
       "target/release/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
       "target/release/sherpa-onnx-c-api.dll": "sherpa-onnx-c-api.dll",
-      "target/release/sherpa-onnx-cxx-api.dll": "sherpa-onnx-cxx-api.dll"
+      "target/release/sherpa-onnx-cxx-api.dll": "sherpa-onnx-cxx-api.dll",
+      "resources/kokoro-en-v0_19/": "models/kokoro-en-v0_19/"
     }
   }
 }

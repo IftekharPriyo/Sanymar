@@ -1,0 +1,12 @@
+{
+  "asset": "kokoro-en-v0_19",
+  "sourceDocumentation": "https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html",
+  "archiveUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2",
+  "archiveBytes": 319625534,
+  "archiveSha256": "912804855a04745fa77a30be545b3f9a5d15c4d66db00b88cbcd4921df605ac7",
+  "requiredFiles": {
+    "model.onnx": "10ff414106a038ce7e9e0126c6461e4dc8a86efaa89dc91d2009d69fe635e339",
+    "voices.bin": "a372c67b056ef0b695c375d39b99630d23fb07ad4c8d87aa32a19a62fca523ad",
+    "tokens.txt": "4f31c71282d14af4e926cd12462078fe9d20d00c589e63fe2750a8f56d6d7f7b"
+  }
+}

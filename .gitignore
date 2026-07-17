@@ -15,3 +15,12 @@ coverage/
 .venv-parler/
 __pycache__/
 *.pyc
+
+# Kokoro is fetched and checksum-verified for desktop packaging. Keep only
+# attribution and the pinned asset manifest in Git.
+src-tauri/resources/kokoro-en-v0_19/*
+!src-tauri/resources/kokoro-en-v0_19/ASSET-MANIFEST.json
+!src-tauri/resources/kokoro-en-v0_19/LICENSE
+!src-tauri/resources/kokoro-en-v0_19/LICENSE-espeak-ng-GPL-3.0-or-later.txt
+!src-tauri/resources/kokoro-en-v0_19/README.md
+!src-tauri/resources/kokoro-en-v0_19/SANYMAR-THIRD-PARTY-NOTICE.md

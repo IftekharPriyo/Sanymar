@@ -10,6 +10,7 @@
 | Malformed API responses        | Typed adapter boundary                                                       | Size limits, strict deserialization, timeouts, validation                        |
 | Unsafe file paths              | Canonical fixed model assets and bounded internal WAV artifacts              | App-data-only generated paths, canonicalization, random names, cleanup           |
 | Dependency compromise          | Narrow dependency set and lockfile                                           | Audit updates, provenance, vulnerability scanning                                |
+| Build-asset substitution       | Fixed official Kokoro URL, byte length, archive and extracted-file SHA-256   | Review manifest changes and preserve model/eSpeak attribution                    |
 | Excessive permissions          | Minimal Tauri capability                                                     | Review every plugin/capability addition                                          |
 | Data retention                 | Schema separates history/scripts                                             | User-visible retention and deletion transaction                                  |
 

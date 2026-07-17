@@ -31,8 +31,11 @@ pub struct SherpaKokoroConfiguration {
 }
 
 impl SherpaKokoroConfiguration {
-    pub fn new(model_directory: &str, output_directory: &Path) -> Result<Self, TtsError> {
-        let model_directory = canonical_directory(Path::new(model_directory))?;
+    pub fn new(
+        model_directory: impl AsRef<Path>,
+        output_directory: &Path,
+    ) -> Result<Self, TtsError> {
+        let model_directory = canonical_directory(model_directory.as_ref())?;
         fs::create_dir_all(output_directory).map_err(|_| TtsError::InvalidConfiguration)?;
         let output_directory = canonical_directory(output_directory)?;
         Ok(Self {

@@ -5,7 +5,7 @@ Sanymar persists typed, non-secret application settings in local SQLite. Spotify
 ## Music playback
 
 - `mockMode`: when enabled, the dashboard uses deterministic fixture tracks. When disabled, it reads the connected Spotify account. This setting does not select the script generator.
-- `spotifyClientId`: the public Spotify application Client ID. Do not enter a client secret.
+- `spotifyClientId`: packaged public Spotify application metadata. It is intentionally hidden from the normal UI; Sanymar never uses or accepts a client secret.
 - `spotifyRedirectUri`: fixed to `http://127.0.0.1:43821/callback` and validated exactly.
 
 ## Script generation
@@ -27,14 +27,15 @@ Generation is deterministic (`temperature: 0`) and strictly validated. If a draf
 
 ## English speech synthesis
 
-- `ttsProvider`: `mock` by default, `sherpa_kokoro` for in-process Kokoro, or `parler_mini` for the manually started local Parler service.
-- `ttsModelDirectory`: absolute path to an extracted `kokoro-en-v0_19` directory containing `model.onnx`, `voices.bin`, `tokens.txt`, and `espeak-ng-data/`. Files are canonicalized and must remain inside this directory.
+- `ttsProvider`: `sherpa_kokoro` is selected automatically when a listener connects Spotify. `mock` and `parler_mini` remain development overrides visible only when debug logging is enabled; they are not part of normal setup.
+- `ttsModelDirectory`: legacy/development-only absolute-path override. Packaged builds prefer the installer-managed `models/kokoro-en-v0_19` resource and do not expose this field in the normal UI. Override files still pass canonical containment validation.
 - `ttsVoiceId`: zero-based speaker ID reported by the selected Kokoro package. The health check rejects IDs outside the model's speaker count.
 - `parlerBaseUrl`: strict HTTP loopback address for the user-managed Parler service. Default: `http://127.0.0.1:43822`. Credentials, paths, queries, fragments, and non-loopback hosts are rejected.
 - `parlerSpeaker`: one of the service's reviewed built-in speakers: `Jon`, `Gary`, `Mike`, `Lea`, or `Jenna`. Default: `Jon`. This is not a voice-cloning or reference-audio field.
 - `ttsSpeedPercent`: base synthesis speed from 50 to 200; default 100. Sanymar applies a small segment-aware delivery factor and clamps the effective rate to the same safe range.
+- `ttsVolumePercent`: provider-neutral RJ loudness from 0 to 100; default 75. It scales generated speech only and does not change Spotify or Windows system volume.
 
-Generated WAV files are stored beneath the application cache, not in the model directory. Models are never downloaded automatically. Real speech uses the Windows default output device; `audioOutputDevice` remains a placeholder for future explicit selection. Debug logging never enables complete prompt, provider-response, dialogue, or credential logging.
+Generated WAV files are stored beneath the application cache, never in the installed model directory. The reviewed Kokoro pack ships with the installer and is never downloaded or replaced at runtime. The normal UI does not expose voice-engine selection, Kokoro paths, model-health details, or speaker-count diagnostics. A versioned settings normalization moves existing live installations away from the former Parler/manual-provider flow to bundled Kokoro once; developers may deliberately enable the override again. Real speech uses the Windows default output device; `audioOutputDevice` remains a placeholder for future explicit selection. Debug logging never enables complete prompt, provider-response, dialogue, or credential logging.
 
 Delivery style is derived from the editorial segment and is not a persisted user setting. It never switches the selected speaker: next-song teases, one-line reactions, and simple transitions are energetic; short jokes are playful; listener observations stay warm; stories and lore are reflective; and station identification is authoritative. Kokoro realizes this as bounded pacing only. Parler receives a fixed, reviewed style description and can synthesize more expressive delivery; users cannot inject arbitrary voice descriptions.
 

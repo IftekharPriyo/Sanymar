@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use chrono::NaiveDate;
 use rand::SeedableRng;
@@ -44,6 +47,8 @@ use crate::{
         AudioArtifact, DeliveryStyle, TextToSpeechProvider, TtsError, VoiceSettings,
     },
 };
+
+const BUNDLED_KOKORO_DIRECTORY: &str = "models/kokoro-en-v0_19";
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedScript {
@@ -447,10 +452,15 @@ fn record_commentary(
         memory.recent_fact_ids.insert(0, fact_id.clone());
     }
     memory.recent_fact_ids.truncate(12);
-    if let Some(opening) = dialogue.split_whitespace().next() {
-        memory.recent_openings.insert(0, opening.to_owned());
+    if let Some(opening) = opening_phrase(dialogue) {
+        memory.recent_openings.insert(0, opening);
         memory.recent_openings.truncate(6);
     }
+}
+
+fn opening_phrase(dialogue: &str) -> Option<String> {
+    let words: Vec<&str> = dialogue.split_whitespace().take(3).collect();
+    (words.len() >= 2).then(|| words.join(" "))
 }
 
 fn unattended_fact_fallback(error: MusicFactError) -> Result<Vec<MusicFact>, AppError> {
@@ -542,7 +552,7 @@ pub(crate) async fn synthesize_recent_script(
             }
         },
         rate: f32::from(settings.tts_speed_percent) / 100.0,
-        volume: 1.0,
+        volume: f32::from(settings.tts_volume_percent) / 100.0,
         delivery_style: delivery_style_for_segment(prepared.segment_type),
     };
     let spoken_dialogue = normalize_for_speech(&prepared.dialogue);
@@ -561,11 +571,9 @@ pub(crate) async fn synthesize_recent_script(
                 .await
         }
         TtsProviderSetting::SherpaKokoro => {
-            let model_directory = settings.tts_model_directory.as_deref().ok_or_else(|| {
-                AppError::Configuration("select a Kokoro model directory in Settings".into())
-            })?;
+            let model_directory = kokoro_model_directory(app, &settings)?;
             let configuration =
-                SherpaKokoroConfiguration::new(model_directory, &tts_output_directory(app)?)
+                SherpaKokoroConfiguration::new(&model_directory, &tts_output_directory(app)?)
                     .map_err(|error| AppError::Configuration(error.to_string()))?;
             let provider =
                 tokio::task::spawn_blocking(move || SherpaKokoroTtsProvider::new(configuration))
@@ -686,11 +694,9 @@ pub async fn get_tts_status(
             message: "Mock TTS is active".into(),
         }),
         TtsProviderSetting::SherpaKokoro => {
-            let model_directory = settings.tts_model_directory.as_deref().ok_or_else(|| {
-                AppError::Configuration("select a Kokoro model directory in Settings".into())
-            })?;
+            let model_directory = kokoro_model_directory(&app, &settings)?;
             let configuration =
-                SherpaKokoroConfiguration::new(model_directory, &tts_output_directory(&app)?)
+                SherpaKokoroConfiguration::new(&model_directory, &tts_output_directory(&app)?)
                     .map_err(|error| AppError::Configuration(error.to_string()))?;
             let health: SherpaTtsHealth = tokio::task::spawn_blocking(move || {
                 let provider = SherpaKokoroTtsProvider::new(configuration)?;
@@ -753,6 +759,30 @@ fn tts_output_directory(app: &AppHandle) -> Result<std::path::PathBuf, AppError>
         .app_cache_dir()
         .map(|path| path.join("tts"))
         .map_err(|error| AppError::Configuration(error.to_string()))
+}
+
+fn kokoro_model_directory(app: &AppHandle, settings: &AppSettings) -> Result<PathBuf, AppError> {
+    let resource_directory = app
+        .path()
+        .resource_dir()
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+    select_kokoro_model_directory(&resource_directory, settings.tts_model_directory.as_deref())
+}
+
+fn select_kokoro_model_directory(
+    resource_directory: &Path,
+    development_override: Option<&str>,
+) -> Result<PathBuf, AppError> {
+    let bundled = resource_directory.join(BUNDLED_KOKORO_DIRECTORY);
+    if bundled.is_dir() {
+        return Ok(bundled);
+    }
+    if let Some(override_directory) = development_override {
+        return Ok(PathBuf::from(override_directory));
+    }
+    Err(AppError::Configuration(
+        "bundled Kokoro voice assets are missing; reinstall Sanymar".into(),
+    ))
 }
 
 fn map_tts_error(error: TtsError) -> AppError {
@@ -940,8 +970,11 @@ fn mock_playback() -> PlaybackState {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
-        delivery_style_for_segment, should_fall_back_to_silence, unattended_fact_fallback,
+        delivery_style_for_segment, opening_phrase, select_kokoro_model_directory,
+        should_fall_back_to_silence, unattended_fact_fallback,
     };
     use crate::{
         errors::AppError,
@@ -950,6 +983,7 @@ mod tests {
         rj_engine::{SegmentType, ValidationIssue},
         tts::DeliveryStyle,
     };
+    use tempfile::tempdir;
 
     #[test]
     fn segment_types_select_bounded_delivery_intent() {
@@ -980,6 +1014,15 @@ mod tests {
     }
 
     #[test]
+    fn repetition_memory_uses_a_phrase_instead_of_banning_one_word() {
+        assert_eq!(
+            opening_phrase("That bassline left room for the lights."),
+            Some("That bassline left".into())
+        );
+        assert_eq!(opening_phrase("Listen."), None);
+    }
+
+    #[test]
     fn unattended_fact_failures_fall_back_but_cancellation_stops() {
         assert!(unattended_fact_fallback(MusicFactError::RateLimited)
             .unwrap_or_else(|error| panic!("rate limit should fall back: {error}"))
@@ -1000,5 +1043,33 @@ mod tests {
         assert!(!should_fall_back_to_silence(
             &ScriptGeneratorError::Unavailable
         ));
+    }
+
+    #[test]
+    fn bundled_kokoro_assets_take_precedence_over_a_development_override() {
+        let resources = tempdir()
+            .unwrap_or_else(|error| panic!("resource fixture could not be created: {error}"));
+        let bundled = resources.path().join("models/kokoro-en-v0_19");
+        std::fs::create_dir_all(&bundled)
+            .unwrap_or_else(|error| panic!("bundled fixture could not be created: {error}"));
+
+        assert_eq!(
+            select_kokoro_model_directory(resources.path(), Some(r"C:\dev\kokoro"))
+                .unwrap_or_else(|error| panic!("bundled path should resolve: {error}")),
+            bundled
+        );
+    }
+
+    #[test]
+    fn development_kokoro_override_is_used_when_bundle_is_absent() {
+        let resources = tempdir()
+            .unwrap_or_else(|error| panic!("resource fixture could not be created: {error}"));
+
+        assert_eq!(
+            select_kokoro_model_directory(resources.path(), Some(r"C:\dev\kokoro"))
+                .unwrap_or_else(|error| panic!("development path should resolve: {error}")),
+            PathBuf::from(r"C:\dev\kokoro")
+        );
+        assert!(select_kokoro_model_directory(resources.path(), None).is_err());
     }
 }

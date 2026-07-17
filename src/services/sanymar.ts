@@ -43,8 +43,9 @@ const profile: DjProfile = {
 
 let browserScript: string | null = null;
 let browserSettings: AppSettings = {
+  settingsVersion: 1,
   mockMode: true,
-  spotifyClientId: null,
+  spotifyClientId: "4e4bff1fbd0b4999b83362432916a872",
   spotifyRedirectUri: "http://127.0.0.1:43821/callback",
   ollamaBaseUrl: "http://127.0.0.1:11434",
   ollamaModel: null,
@@ -60,6 +61,7 @@ let browserSettings: AppSettings = {
   ttsModelDirectory: null,
   ttsVoiceId: 0,
   ttsSpeedPercent: 100,
+  ttsVolumePercent: 75,
   parlerBaseUrl: "http://127.0.0.1:43822",
   parlerSpeaker: "Jon",
   audioOutputDevice: null,

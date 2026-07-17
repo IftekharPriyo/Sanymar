@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "assets:kokoro": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/fetch-kokoro.ps1",
+    "build:desktop": "npm.cmd run assets:kokoro && npm.cmd run build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

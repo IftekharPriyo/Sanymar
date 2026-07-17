@@ -98,6 +98,7 @@ export type TalkFrequency = "minimal" | "normal" | "talkative";
 export type TtsProvider = "mock" | "sherpa_kokoro" | "parler_mini";
 
 export interface AppSettings {
+  settingsVersion: number;
   mockMode: boolean;
   spotifyClientId: string | null;
   spotifyRedirectUri: string;
@@ -115,6 +116,7 @@ export interface AppSettings {
   ttsModelDirectory: string | null;
   ttsVoiceId: number;
   ttsSpeedPercent: number;
+  ttsVolumePercent: number;
   parlerBaseUrl: string;
   parlerSpeaker: string;
   audioOutputDevice: string | null;

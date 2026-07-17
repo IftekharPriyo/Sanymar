@@ -10,7 +10,7 @@ The application currently supports:
 - Spotify Authorization Code with PKCE, Windows Credential Manager token storage, and normalized current/queued-track monitoring;
 - optional loopback-only Ollama generation through `/api/chat` with structured output, validation, one bounded corrective retry, and cancellation;
 - unattended, cache-first MusicBrainz first-release metadata with conservative matching;
-- English Kokoro synthesis in-process through Sherpa-ONNX, or an explicitly user-started Parler-TTS Mini loopback provider;
+- bundled English Kokoro synthesis in-process through Sherpa-ONNX, with Parler retained only as a development override;
 - validated WAV playback on the Windows default audio device; and
 - opt-in automatic transition speech that pre-generates one segment, pauses Spotify at the handoff, plays the RJ alone, and resumes the next track from its beginning.
 
@@ -50,7 +50,7 @@ npm.cmd run tauri dev
 
 Mock mode is enabled by default and needs no account, model, TTS engine, or audio device. The UI labels mocked providers, and mock speech produces no sound.
 
-Release builds produce a portable executable directory plus unsigned MSI and NSIS installers. The four pinned Sherpa/ONNX Runtime DLLs are installed beside `sanymar.exe`; user-managed Ollama, Kokoro models, Parler, and Python are not bundled.
+Release builds produce a portable executable directory plus unsigned MSI and NSIS installers. The four pinned Sherpa/ONNX Runtime DLLs are installed beside `sanymar.exe`, and the reviewed English Kokoro pack is installed under `models/kokoro-en-v0_19`. Ollama, Parler, and Python are not bundled.
 
 Build the Windows packages with:
 
@@ -58,25 +58,24 @@ Build the Windows packages with:
 npm.cmd run tauri build
 ```
 
+The first clean release build downloads the pinned official `kokoro-en-v0_19.tar.bz2` into the ignored `.local` build cache, verifies its exact byte length and SHA-256, extracts it with the `tar`/`bzip2` tools shipped by Git for Windows, and verifies the required model files before Tauri packages them. Later builds reuse the verified local assets. The large model and language-data files are intentionally excluded from Git; the source URL, hashes, licenses, and attribution remain committed. This is release-build preparation only—the installed application never downloads a voice model.
+
 Outputs are written beneath `src-tauri/target/release/`:
 
 - `sanymar.exe` and its required DLLs form the portable release directory;
 - `bundle/msi/` contains the WiX installer; and
 - `bundle/nsis/` contains the setup executable.
 
-Keep the portable `.exe` together with `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, and `sherpa-onnx-cxx-api.dll`. Moving only `sanymar.exe` will break Kokoro startup. The installers are unsigned development artifacts, so Windows may show an unknown-publisher warning.
+Keep the portable `.exe` together with its four native DLLs and `models/kokoro-en-v0_19` resource directory. Moving only `sanymar.exe` will break Kokoro startup. The installers are unsigned development artifacts, so Windows may show an unknown-publisher warning.
 
 ## Spotify setup
 
-1. Create a desktop application in the Spotify developer dashboard.
-2. Register the exact redirect URI `http://127.0.0.1:43821/callback`. Do not use `localhost` or the former `/oauth/callback` path.
-3. Run the native app and open **Settings > Spotify connection**.
-4. Paste the public Spotify Client ID. Do not enter or create a client secret for Sanymar.
-5. Select **Connect Spotify** and finish authorization in the system browser.
-6. Enable **Use live Spotify playback on the dashboard**, then save settings.
-7. Start playback on an active Spotify device.
+1. The project owner registers the exact redirect URI `http://127.0.0.1:43821/callback` in the packaged Spotify application. Do not use `localhost` or the former `/oauth/callback` path.
+2. Run the native app and open **Settings > Spotify connection**.
+3. Select **Connect Spotify** and finish authorization in the system browser. Live playback is enabled automatically after connection.
+4. Start playback on an active Spotify device.
 
-Sanymar reads the current track, progress, active device, and queue. It does not download music. Access and refresh tokens are stored in Windows Credential Manager, never SQLite, `.env`, logs, or frontend storage. Disconnecting Spotify removes the stored credential.
+Sanymar reads the current track, progress, active device, and queue. It does not download music. The packaged Spotify Client ID is public application metadata and is intentionally hidden from normal settings. No client secret is used. Access and refresh tokens are stored in Windows Credential Manager, never SQLite, `.env`, logs, or frontend storage. Disconnecting Spotify removes the stored credential.
 
 The authorization includes `user-modify-playback-state`. Automatic commentary uses it only for device-targeted pause, expected-track advancement, seek-to-start, and resume around the prepared RJ segment; it does not expose general playback controls.
 
@@ -107,19 +106,18 @@ MusicBrainz currently supplies only strongly matched first-release-date metadata
 
 ## English Kokoro setup
 
-1. Download `kokoro-en-v0_19` yourself from the [Sherpa-ONNX Kokoro documentation](https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html).
-2. Extract it to a permanent local directory containing `model.onnx`, `voices.bin`, `tokens.txt`, and `espeak-ng-data/`.
-3. Open **Settings > Local English voice** and select **Sherpa-ONNX Kokoro**.
-4. Enter the absolute model directory and choose a voice ID and base speed.
-5. Select **Check voice provider**, save, then use **Generate with Ollama** and **Speak test segment** for a manual end-to-end check.
+1. Install Sanymar with the NSIS or MSI package; the reviewed `kokoro-en-v0_19` assets are included.
+2. Open **Settings > RJ voice**. The bundled English voice is already selected automatically.
+3. Choose the speech speed and RJ volume, then save. No voice model path or provider process is required.
+4. Use **Generate with Ollama** and **Speak test segment** for a manual end-to-end check.
 
-Sherpa-ONNX `1.13.4` is pinned and uses its Windows shared runtime. Sanymar does not bundle or download the Kokoro model. Generated mono PCM WAV files are validated and written only beneath the application cache before default-device playback.
+Sherpa-ONNX `1.13.4` is pinned and uses its Windows shared runtime. Sanymar resolves the installed pack automatically and never downloads or replaces voice assets at runtime. Generated mono PCM WAV files are validated and written only beneath the application cache before default-device playback. The model's Apache-2.0 notice and the eSpeak NG GPL-3.0-or-later notice/source reference travel with the resource pack.
 
 Kokoro receives speech-first dialogue plus a typed delivery style. The current adapter realizes delivery through small, bounded pacing changes while preserving the selected voice. This improves phrasing but is not genuine semantic emotion, pitch, or emphasis control.
 
-## Parler-TTS Mini setup
+## Development-only Parler-TTS Mini override
 
-Parler is the optional prompt-directed voice provider. It runs as a user-managed loopback process so the GPU model remains loaded between segments. Sanymar never starts Python, downloads the model, accepts reference audio, or exposes arbitrary voice descriptions.
+Parler is retained only as an advanced development adapter and is not part of listener setup. Normal packaged use selects bundled Kokoro automatically. Parler runs as a user-managed loopback process so the GPU model remains loaded between segments. Sanymar never starts Python, downloads the model, accepts reference audio, or exposes arbitrary voice descriptions.
 
 1. Install Python 3.12 and create `.venv-parler` in the repository root.
 2. Install matching PyTorch and torchaudio wheels for the local CUDA runtime.
@@ -132,7 +130,7 @@ Parler is the optional prompt-directed voice provider. It runs as a user-managed
    ```
 
 5. Wait for `Parler Mini ready on http://127.0.0.1:43822`.
-6. Open **Settings > Local English voice**, select **Parler-TTS Mini local service**, keep the loopback URL, select a supported speaker, and choose **Check voice provider**.
+6. Enable development debug logging, open **Settings > RJ voice > Development voice override**, select **User-managed Parler**, keep the loopback URL, and select a supported speaker.
 7. Save and run a manual speech test before enabling automatic transition speech.
 
 The provider must remain open while selected. Stop it with `Ctrl+C`. Sanymar sends only dialogue, the allowlisted speaker, typed delivery style, bounded speed, and volume. Returned PCM WAV data is size-bounded and validated before caching or playback. See [the provider contract](tools/parler-provider/README.md).
