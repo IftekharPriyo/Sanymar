@@ -19,9 +19,9 @@ declare global {
 }
 
 const profile: DjProfile = {
-  id: "mira-vale",
-  name: "Mira Vale",
-  stationName: "Night Current",
+  id: "sanymar",
+  name: "Sanymar",
+  stationName: "The Swell",
   personalityTraits: ["curious", "warm", "observant"],
   energyLevel: 4,
   humourStyle: "lightly dry, never cruel",
@@ -35,7 +35,7 @@ const profile: DjProfile = {
   restrictedSubjects: ["private listener assumptions"],
   disallowedPhrases: ["Did you know", "without further ado", "coming up next"],
   stationLore: [
-    "The Night Current studio sits above a tea shop that never closes.",
+    "The Swell broadcasts from a small room where the walls seem to hum after midnight.",
   ],
   runningJokes: [],
   addressesListener: true,
@@ -55,7 +55,7 @@ let browserSettings: AppSettings = {
   scriptGeneratorProvider: "mock",
   groqBaseUrl: "https://api.groq.com/openai/v1/",
   groqModel: "qwen/qwen3.6-27b",
-  djProfileId: "mira-vale",
+  djProfileId: "sanymar",
   talkFrequency: "normal",
   maximumSegmentWords: 42,
   musicbrainzContact: null,
@@ -125,8 +125,8 @@ export const sanymarService = {
       mockMode: true,
       llmMockMode: browserSettings.scriptGeneratorProvider === "mock",
       ttsMockMode: true,
-      connectionStatus: "Connected to browser mock",
-      currentProvider: "Spotify (mock)",
+      connectionStatus: "Using demo playback data",
+      currentProvider: "Spotify preview data",
       playback: {
         ...tracks,
         progressMs: 184_000,
@@ -139,8 +139,8 @@ export const sanymarService = {
       llmStatus:
         browserSettings.scriptGeneratorProvider === "groq_qwen"
           ? "Groq Qwen configured (desktop health check required)"
-          : "Mock generator ready",
-      ttsStatus: "Mock TTS ready (no audio generated)",
+          : "Test dialogue engine ready",
+      ttsStatus: "Silent voice preview (no audio generated)",
       recentScript: browserScript,
     };
   },
@@ -165,7 +165,7 @@ export const sanymarService = {
       artifactId: crypto.randomUUID(),
       durationMs: 4_200,
       isMock: true,
-      message: "Mock speech completed; no sound was produced.",
+      message: "Silent voice preview completed; no sound was produced.",
     };
   },
 
@@ -232,7 +232,7 @@ export const sanymarService = {
     return {
       configured: false,
       health: null,
-      message: "Mock TTS is active in the browser preview.",
+      message: "Silent voice preview is active in the browser.",
     };
   },
 

@@ -28,9 +28,9 @@ pub struct DjProfile {
 impl Default for DjProfile {
     fn default() -> Self {
         Self {
-            id: "mira-vale".into(),
-            name: "Mira Vale".into(),
-            station_name: "Night Current".into(),
+            id: "sanymar".into(),
+            name: "Sanymar".into(),
+            station_name: "The Swell".into(),
             personality_traits: vec!["curious".into(), "warm".into(), "observant".into()],
             energy_level: 4,
             humour_style: "lightly dry, never cruel".into(),
@@ -48,7 +48,8 @@ impl Default for DjProfile {
                 "coming up next".into(),
             ],
             station_lore: vec![
-                "The Night Current studio sits above a tea shop that never closes.".into(),
+                "The Swell broadcasts from a small room where the walls seem to hum after midnight."
+                    .into(),
             ],
             running_jokes: Vec::new(),
             addresses_listener: true,

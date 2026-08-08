@@ -14,7 +14,7 @@ One local process is operationally appropriate; modules and traits provide isola
 
 ## ADR-004: SQLite + SQLx migrations — accepted
 
-SQLite matches local-first deployment. SQLx provides async access, typed rows, pooling, and repository-owned migrations.
+SQLite matches single-user desktop deployment. SQLx provides async access, typed rows, pooling, and repository-owned migrations.
 
 ## ADR-005: Provider abstractions and normalized music types — accepted
 

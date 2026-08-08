@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn rejects_page_formatting_and_speaker_labels() {
         for dialogue in [
-            "Mira Vale: Keep it moving.",
+            "Sanymar: Keep it moving.",
             "Now playing ‘Lights’. 🎧",
             "[energetic] Keep it moving.",
         ] {

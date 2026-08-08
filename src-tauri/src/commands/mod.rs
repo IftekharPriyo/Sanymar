@@ -147,8 +147,8 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardView, 
     let (playback, connection_status, current_provider) = if settings.mock_mode {
         (
             mock_playback(),
-            "Connected to mock provider".into(),
-            "Spotify (mock)".into(),
+            "Using demo playback data".into(),
+            "Spotify preview data".into(),
         )
     } else {
         let provider = spotify_provider(&settings, state.credential_store.clone())?;
@@ -184,7 +184,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardView, 
         talk_frequency: format!("{:?}", settings.talk_frequency),
         llm_status: llm_status_label(&settings),
         tts_status: match settings.tts_provider {
-            TtsProviderSetting::Mock => "Mock TTS ready (no audio generated)".into(),
+            TtsProviderSetting::Mock => "Silent voice preview (no audio generated)".into(),
             TtsProviderSetting::SherpaKokoro => {
                 "Sherpa-ONNX Kokoro configured (health not checked)".into()
             }
@@ -447,7 +447,7 @@ async fn generate_with_configured_provider(
 
 fn llm_status_label(settings: &AppSettings) -> String {
     match settings.script_generator_provider {
-        ScriptGeneratorProviderSetting::Mock => "Mock script generator ready".into(),
+        ScriptGeneratorProviderSetting::Mock => "Test dialogue engine ready".into(),
         ScriptGeneratorProviderSetting::Ollama => format!(
             "Ollama: {} (health not checked)",
             settings
@@ -813,7 +813,7 @@ pub(crate) async fn play_prepared_audio(
         duration_ms: prepared.artifact.duration_ms,
         is_mock: prepared.artifact.is_mock,
         message: if prepared.artifact.is_mock {
-            "Mock speech completed; no sound was produced.".into()
+            "Silent voice preview completed; no sound was produced.".into()
         } else {
             match prepared.provider {
                 TtsProviderSetting::ParlerMini => {
@@ -856,7 +856,7 @@ pub async fn get_tts_status(
         TtsProviderSetting::Mock => Ok(TtsStatusView {
             configured: false,
             health: None,
-            message: "Mock TTS is active".into(),
+            message: "Silent voice preview is active".into(),
         }),
         TtsProviderSetting::SherpaKokoro => {
             let model_directory = kokoro_model_directory(&app, &settings)?;

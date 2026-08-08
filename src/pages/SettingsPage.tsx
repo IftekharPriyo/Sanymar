@@ -36,7 +36,7 @@ export function SettingsPage() {
   }, []);
 
   if (!settings)
-    return <main className="loading">Loading local settings…</main>;
+    return <main className="loading">Loading studio settings...</main>;
 
   const save = async () => {
     try {
@@ -46,7 +46,7 @@ export function SettingsPage() {
         useOllama: false,
       });
       setSettings(saved);
-      setMessage("Settings saved locally.");
+      setMessage("Settings saved.");
       setError(null);
       return saved;
     } catch (reason) {
@@ -155,7 +155,7 @@ export function SettingsPage() {
 
   return (
     <main className="settings-page">
-      <p className="eyebrow">Local configuration</p>
+      <p className="eyebrow">Configuration</p>
       <h1>Studio settings</h1>
       <p className="lede">
         OAuth tokens are never displayed or stored in this form.
@@ -432,7 +432,7 @@ export function SettingsPage() {
                   })
                 }
               >
-                <option value="mock">Silent mock</option>
+                <option value="mock">Silent preview</option>
                 <option value="sherpa_kokoro">Bundled Kokoro</option>
                 <option value="parler_mini">User-managed Parler</option>
               </select>

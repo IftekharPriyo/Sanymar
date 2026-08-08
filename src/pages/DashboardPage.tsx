@@ -3,35 +3,43 @@ import { StatusPill } from "../components/StatusPill";
 import { TrackCard } from "../components/TrackCard";
 import { useDashboard } from "../hooks/useDashboard";
 
+function currentGreeting(date = new Date()): string {
+  const hour = date.getHours();
+  if (hour < 12) return "Good morning.";
+  if (hour < 18) return "Good afternoon.";
+  return "Good evening.";
+}
+
 export function DashboardPage() {
   const { dashboard, busy, notice, error, generate, speak } = useDashboard();
+  const greeting = currentGreeting();
 
   if (!dashboard)
-    return <main className="loading">{error ?? "Tuning the studio…"}</main>;
+    return <main className="loading">{error ?? "Tuning The Swell..."}</main>;
 
   return (
     <main className="dashboard">
       <section className="hero-row">
         <div>
-          <p className="eyebrow">Personal radio, locally directed</p>
-          <h1>Good evening. The booth is listening.</h1>
+          <p className="eyebrow">The Swell</p>
+          <h1>{greeting} Sanymar is listening.</h1>
           <p className="lede">
-            A reviewable mock broadcast chain—ready before any account is
-            connected.
+            Your personal radio host watches the queue, prepares a short
+            handoff, and speaks between songs.
           </p>
         </div>
         <div className="badges">
           {dashboard.mockMode && (
-            <StatusPill label="Mock Spotify" tone="warning" />
+            <StatusPill label="Demo playback data" tone="warning" />
           )}
           {dashboard.llmMockMode && (
-            <StatusPill label="Mock script generator" tone="warning" />
+            <StatusPill label="Test dialogue engine" tone="warning" />
           )}
           {!dashboard.llmMockMode && (
-            <StatusPill label="Real script model" tone="good" />
+            <StatusPill label="Groq Qwen dialogue" tone="good" />
           )}
           {dashboard.ttsMockMode ? (
-            <StatusPill label="Mock TTS" tone="warning" />
+            <StatusPill label="Silent voice preview" tone="warning" />
           ) : (
             <StatusPill label="Kokoro WAV" tone="good" />
           )}
@@ -76,9 +84,9 @@ export function DashboardPage() {
               onClick={() => void generate()}
             >
               {busy
-                ? "Working…"
+                ? "Working..."
                 : dashboard.llmMockMode
-                  ? "Generate mock segment"
+                  ? "Generate test segment"
                   : "Generate with model"}
             </button>
             <button
@@ -89,17 +97,18 @@ export function DashboardPage() {
             </button>
           </div>
           <p className="fine-print">
-            Script mode: {dashboard.llmMockMode ? "mock" : dashboard.llmStatus}.{" "}
+            Dialogue:{" "}
+            {dashboard.llmMockMode ? "test engine" : dashboard.llmStatus}.{" "}
             {dashboard.ttsMockMode
-              ? "Speech synthesis and playback are simulated."
-              : "Kokoro generates a real WAV; device playback is still simulated."}
+              ? "Voice playback is silent in this preview mode."
+              : "Kokoro generates and plays the RJ voice through the default device."}
           </p>
         </article>
 
         <aside className="panel status-panel">
           <p className="eyebrow">Studio rack</p>
-          <ServiceStatus name="Provider" detail={dashboard.currentProvider} />
-          <ServiceStatus name="Local LLM" detail={dashboard.llmStatus} />
+          <ServiceStatus name="Music" detail={dashboard.currentProvider} />
+          <ServiceStatus name="Dialogue model" detail={dashboard.llmStatus} />
           <ServiceStatus name="Voice" detail={dashboard.ttsStatus} />
           <ServiceStatus
             name="Talk frequency"

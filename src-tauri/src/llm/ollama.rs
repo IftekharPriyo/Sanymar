@@ -378,7 +378,7 @@ mod tests {
         let response = ChatResponse {
             message: ChatResponseMessage {
                 content: serde_json::to_string(&json!({
-                    "dialogue": "Mira Vale: ‘Quiet Signal’ is still glowing. [warm] Keep moving. 🎧",
+                    "dialogue": "Sanymar: ‘Quiet Signal’ is still glowing. [warm] Keep moving. 🎧",
                     "factIds": []
                 }))
                 .unwrap_or_else(|error| panic!("fixture failed: {error}")),

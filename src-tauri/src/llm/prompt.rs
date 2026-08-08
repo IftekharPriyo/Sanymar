@@ -10,7 +10,7 @@ use crate::{
 
 use super::{ScriptGeneratorError, ScriptRequest};
 
-pub(super) const SYSTEM_PROMPT: &str = r#"You write short spoken dialogue for a personal local radio host.
+pub(super) const SYSTEM_PROMPT: &str = r#"You write short spoken dialogue for a personal radio host.
 Return only one JSON object matching the supplied schema.
 Write for a human voice, not for a page. Use natural contractions, breath-sized phrases, and one clear idea per sentence. Most sentences should be 4 to 14 words. An occasional short fragment is welcome when it sounds natural aloud.
 Use commas and periods for deliberate pauses. Use no more than one exclamation mark. Never stack punctuation.

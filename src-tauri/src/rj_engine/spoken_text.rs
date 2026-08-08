@@ -94,10 +94,8 @@ mod tests {
     #[test]
     fn removes_page_formatting_but_preserves_words_and_contractions() {
         assert_eq!(
-            normalize_for_speech(
-                "Young the Giant’s ‘Mind Over Matter’ — let’s go! 🎧 #Night_Current"
-            ),
-            "Young the Giant's Mind Over Matter, let's go! Night Current"
+            normalize_for_speech("Young the Giant’s ‘Mind Over Matter’ — let’s go! 🎧 #The_Swell"),
+            "Young the Giant's Mind Over Matter, let's go! The Swell"
         );
     }
 
@@ -105,8 +103,8 @@ mod tests {
     fn removes_speaker_labels_and_non_spoken_tags() {
         assert_eq!(
             normalize_generated_dialogue(
-                "Mira Vale: [excited] Keep it moving <break> with the next one.",
-                "Mira Vale"
+                "Sanymar: [excited] Keep it moving <break> with the next one.",
+                "Sanymar"
             ),
             "Keep it moving with the next one."
         );

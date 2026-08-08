@@ -85,7 +85,7 @@ impl Default for AppSettings {
             script_generator_provider: default_script_generator_provider(),
             groq_base_url: default_groq_base_url(),
             groq_model: Some(default_groq_model_value()),
-            dj_profile_id: "mira-vale".into(),
+            dj_profile_id: "sanymar".into(),
             talk_frequency: TalkFrequency::Normal,
             maximum_segment_words: 42,
             musicbrainz_contact: None,
@@ -121,6 +121,9 @@ impl AppSettings {
         }
         if self.spotify_redirect_uri == LEGACY_SPOTIFY_REDIRECT_URI {
             self.spotify_redirect_uri = SPOTIFY_REDIRECT_URI.into();
+        }
+        if self.dj_profile_id == "mira-vale" {
+            self.dj_profile_id = "sanymar".into();
         }
         self.normalize_user_input();
     }

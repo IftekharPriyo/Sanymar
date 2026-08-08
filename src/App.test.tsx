@@ -6,12 +6,10 @@ import { dashboardErrorMessage } from "./hooks/useDashboard";
 describe("Sanymar mock dashboard", () => {
   it("labels mock mode and generates a test segment", async () => {
     render(<App />);
-    expect(await screen.findByText("Mock Spotify")).toBeInTheDocument();
-    expect(
-      await screen.findByText("Mock script generator"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Demo playback data")).toBeInTheDocument();
+    expect(await screen.findByText("Test dialogue engine")).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Generate mock segment" }),
+      screen.getByRole("button", { name: "Generate test segment" }),
     );
     expect(
       await screen.findByText(/streetlights to get involved/i),

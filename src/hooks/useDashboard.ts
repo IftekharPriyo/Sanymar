@@ -78,7 +78,7 @@ export function useDashboard() {
       );
       setError(null);
     } catch (reason) {
-      setError(dashboardErrorMessage(reason, "Mock generation failed."));
+      setError(dashboardErrorMessage(reason, "Dialogue generation failed."));
     } finally {
       setBusy(false);
     }
@@ -91,7 +91,7 @@ export function useDashboard() {
       setNotice(result.message);
       setError(null);
     } catch (reason) {
-      setError(dashboardErrorMessage(reason, "Mock speech failed."));
+      setError(dashboardErrorMessage(reason, "Speech playback failed."));
     } finally {
       setBusy(false);
     }
