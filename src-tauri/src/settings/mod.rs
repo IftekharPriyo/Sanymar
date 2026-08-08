@@ -22,6 +22,14 @@ pub enum TtsProviderSetting {
     ParlerMini,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptGeneratorProviderSetting {
+    Mock,
+    Ollama,
+    GroqQwen,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -34,6 +42,12 @@ pub struct AppSettings {
     pub ollama_model: Option<String>,
     #[serde(default)]
     pub use_ollama: bool,
+    #[serde(default = "default_script_generator_provider")]
+    pub script_generator_provider: ScriptGeneratorProviderSetting,
+    #[serde(default = "default_groq_base_url")]
+    pub groq_base_url: String,
+    #[serde(default = "default_groq_model")]
+    pub groq_model: Option<String>,
     pub dj_profile_id: String,
     pub talk_frequency: TalkFrequency,
     pub maximum_segment_words: u16,
@@ -68,6 +82,9 @@ impl Default for AppSettings {
             ollama_base_url: "http://127.0.0.1:11434".into(),
             ollama_model: None,
             use_ollama: false,
+            script_generator_provider: default_script_generator_provider(),
+            groq_base_url: default_groq_base_url(),
+            groq_model: Some(default_groq_model_value()),
             dj_profile_id: "mira-vale".into(),
             talk_frequency: TalkFrequency::Normal,
             maximum_segment_words: 42,
@@ -109,6 +126,12 @@ impl AppSettings {
     }
 
     pub fn normalize_user_input(&mut self) {
+        if self.use_ollama
+            || self.script_generator_provider == ScriptGeneratorProviderSetting::Ollama
+        {
+            self.script_generator_provider = ScriptGeneratorProviderSetting::GroqQwen;
+        }
+        self.use_ollama = false;
         if let Some(directory) = self.tts_model_directory.as_mut() {
             let trimmed = directory.trim();
             let unquoted = trimmed
@@ -179,11 +202,6 @@ impl AppSettings {
                 "Spotify Client ID must contain only ASCII letters and numbers".into(),
             ));
         }
-        crate::llm::ollama::validate_local_base_url(&self.ollama_base_url).map_err(|_| {
-            AppError::Configuration(
-                "Ollama base URL must be an HTTP loopback URL with an explicit port".into(),
-            )
-        })?;
         if self.ollama_model.as_ref().is_some_and(|model| {
             let model = model.trim();
             model.is_empty() || model.len() > 200 || model.chars().any(char::is_control)
@@ -192,10 +210,26 @@ impl AppSettings {
                 "Ollama model name is invalid".into(),
             ));
         }
-        if self.use_ollama && self.ollama_model.is_none() {
-            return Err(AppError::Configuration(
-                "select an installed Ollama model before enabling Ollama mode".into(),
-            ));
+        crate::llm::groq::validate_https_base_url(&self.groq_base_url).map_err(|_| {
+            AppError::Configuration("Groq base URL must be an HTTPS URL without credentials".into())
+        })?;
+        if self
+            .groq_model
+            .as_ref()
+            .is_some_and(|model| crate::llm::groq::validate_model(model).is_err())
+        {
+            return Err(AppError::Configuration("Groq model name is invalid".into()));
+        }
+        match self.script_generator_provider {
+            ScriptGeneratorProviderSetting::Mock => {}
+            ScriptGeneratorProviderSetting::Ollama => {}
+            ScriptGeneratorProviderSetting::GroqQwen => {
+                if self.groq_model.is_none() {
+                    return Err(AppError::Configuration(
+                        "select a Groq Qwen model before enabling cloud Qwen mode".into(),
+                    ));
+                }
+            }
         }
         let redirect = url::Url::parse(&self.spotify_redirect_uri)
             .map_err(|_| AppError::Configuration("Spotify redirect URI is invalid".into()))?;
@@ -220,7 +254,23 @@ const fn default_tts_speed_percent() -> u16 {
     100
 }
 
-const CURRENT_SETTINGS_VERSION: u16 = 1;
+const CURRENT_SETTINGS_VERSION: u16 = 2;
+
+const fn default_script_generator_provider() -> ScriptGeneratorProviderSetting {
+    ScriptGeneratorProviderSetting::GroqQwen
+}
+
+fn default_groq_base_url() -> String {
+    crate::llm::groq::default_base_url()
+}
+
+fn default_groq_model() -> Option<String> {
+    Some(default_groq_model_value())
+}
+
+fn default_groq_model_value() -> String {
+    crate::llm::groq::default_model()
+}
 
 const fn default_tts_volume_percent() -> u16 {
     75
@@ -292,7 +342,7 @@ mod tests {
             ..AppSettings::default()
         };
         settings.normalize_legacy_values();
-        assert_eq!(settings.settings_version, 1);
+        assert_eq!(settings.settings_version, 2);
         assert_eq!(
             settings.tts_provider,
             super::TtsProviderSetting::SherpaKokoro
@@ -310,21 +360,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_remote_ollama_urls() {
+    fn groq_mode_requires_a_model() {
         let settings = AppSettings {
-            ollama_base_url: "https://example.com:11434".into(),
+            script_generator_provider: super::ScriptGeneratorProviderSetting::GroqQwen,
+            groq_model: None,
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
     }
 
     #[test]
-    fn ollama_mode_requires_a_model() {
-        let settings = AppSettings {
+    fn normalizes_legacy_ollama_provider_selection() {
+        let mut settings = AppSettings {
+            settings_version: 1,
             use_ollama: true,
             ..AppSettings::default()
         };
-        assert!(settings.validate().is_err());
+        settings.normalize_legacy_values();
+        assert_eq!(
+            settings.script_generator_provider,
+            super::ScriptGeneratorProviderSetting::GroqQwen
+        );
+        assert!(!settings.use_ollama);
     }
 
     #[test]

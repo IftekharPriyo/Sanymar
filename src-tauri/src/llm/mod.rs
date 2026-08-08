@@ -30,11 +30,17 @@ pub struct ScriptCandidate {
 
 #[derive(Debug, Error)]
 pub enum ScriptGeneratorError {
-    #[error("local language model configuration is invalid")]
+    #[error("language model configuration is invalid")]
     InvalidConfiguration,
-    #[error("local language model is unavailable")]
+    #[error("language model provider is unavailable")]
     Unavailable,
-    #[error("selected local model is unavailable")]
+    #[error("language model authentication failed")]
+    Authentication,
+    #[error("language model rate limit was reached")]
+    RateLimited,
+    #[error("language model provider rejected the request: {0}")]
+    ProviderRejected(String),
+    #[error("selected language model is unavailable")]
     ModelUnavailable,
     #[error("generation timed out")]
     Timeout,
@@ -64,6 +70,8 @@ pub trait ScriptGenerator: Send + Sync {
     ) -> Result<Vec<ScriptCandidate>, ScriptGeneratorError>;
 }
 
+mod contract;
+pub mod groq;
 pub mod mock;
 pub mod ollama;
 mod prompt;

@@ -4,6 +4,8 @@ import type {
   Dashboard,
   DjProfile,
   GeneratedSegment,
+  GroqKeyStatus,
+  GroqStatus,
   OllamaStatus,
   SpeechResult,
   SpotifyConnectionStatus,
@@ -43,13 +45,16 @@ const profile: DjProfile = {
 
 let browserScript: string | null = null;
 let browserSettings: AppSettings = {
-  settingsVersion: 1,
+  settingsVersion: 2,
   mockMode: true,
   spotifyClientId: "4e4bff1fbd0b4999b83362432916a872",
   spotifyRedirectUri: "http://127.0.0.1:43821/callback",
   ollamaBaseUrl: "http://127.0.0.1:11434",
   ollamaModel: null,
   useOllama: false,
+  scriptGeneratorProvider: "mock",
+  groqBaseUrl: "https://api.groq.com/openai/v1/",
+  groqModel: "qwen/qwen3.6-27b",
   djProfileId: "mira-vale",
   talkFrequency: "normal",
   maximumSegmentWords: 42,
@@ -118,7 +123,7 @@ export const sanymarService = {
     if (isTauri()) return invoke<Dashboard>("get_dashboard");
     return {
       mockMode: true,
-      llmMockMode: !browserSettings.useOllama,
+      llmMockMode: browserSettings.scriptGeneratorProvider === "mock",
       ttsMockMode: true,
       connectionStatus: "Connected to browser mock",
       currentProvider: "Spotify (mock)",
@@ -131,7 +136,10 @@ export const sanymarService = {
       broadcastState: browserScript ? "Waiting for transition" : "Idle",
       djProfile: { ...profile },
       talkFrequency: "Normal",
-      llmStatus: "Mock generator ready (Ollama not connected)",
+      llmStatus:
+        browserSettings.scriptGeneratorProvider === "groq_qwen"
+          ? "Groq Qwen configured (desktop health check required)"
+          : "Mock generator ready",
       ttsStatus: "Mock TTS ready (no audio generated)",
       recentScript: browserScript,
     };
@@ -189,6 +197,33 @@ export const sanymarService = {
       configured: Boolean(browserSettings.ollamaModel),
       health: null,
       message: "Ollama health checks are available only in the desktop app.",
+    };
+  },
+
+  async getGroqStatus(): Promise<GroqStatus> {
+    if (isTauri()) return invoke<GroqStatus>("get_groq_status");
+    return {
+      configured: false,
+      apiKeyConfigured: false,
+      health: null,
+      message: "Groq health checks are available only in the desktop app.",
+    };
+  },
+
+  async saveGroqApiKey(apiKey: string): Promise<GroqKeyStatus> {
+    if (isTauri())
+      return invoke<GroqKeyStatus>("save_groq_api_key", { apiKey });
+    return {
+      apiKeyConfigured: Boolean(apiKey.trim()),
+      message: "Groq API key would be saved in the desktop app.",
+    };
+  },
+
+  async deleteGroqApiKey(): Promise<GroqKeyStatus> {
+    if (isTauri()) return invoke<GroqKeyStatus>("delete_groq_api_key");
+    return {
+      apiKeyConfigured: false,
+      message: "Groq API key would be removed in the desktop app.",
     };
   },
 

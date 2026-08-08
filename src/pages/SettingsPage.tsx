@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { sanymarService } from "../services/sanymar";
 import type {
   AppSettings,
+  GroqStatus,
   SpotifyConnectionStatus,
-  OllamaStatus,
   TalkFrequency,
   TtsProvider,
 } from "../types/domain";
@@ -26,8 +26,9 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [spotify, setSpotify] = useState<SpotifyConnectionStatus | null>(null);
   const [spotifyBusy, setSpotifyBusy] = useState(false);
-  const [ollama, setOllama] = useState<OllamaStatus | null>(null);
-  const [ollamaBusy, setOllamaBusy] = useState(false);
+  const [groq, setGroq] = useState<GroqStatus | null>(null);
+  const [groqBusy, setGroqBusy] = useState(false);
+  const [groqApiKey, setGroqApiKey] = useState("");
 
   useEffect(() => {
     void sanymarService.getSettings().then(setSettings);
@@ -39,7 +40,11 @@ export function SettingsPage() {
 
   const save = async () => {
     try {
-      const saved = await sanymarService.saveSettings(settings);
+      const saved = await sanymarService.saveSettings({
+        ...settings,
+        scriptGeneratorProvider: "groq_qwen",
+        useOllama: false,
+      });
       setSettings(saved);
       setMessage("Settings saved locally.");
       setError(null);
@@ -95,20 +100,56 @@ export function SettingsPage() {
     }
   };
 
-  const checkOllama = async () => {
-    setOllamaBusy(true);
+  const saveGroqKey = async () => {
+    setGroqBusy(true);
     setMessage(null);
     try {
-      const saved = await save();
-      if (!saved) return;
-      const status = await sanymarService.getOllamaStatus();
-      setOllama(status);
+      const status = await sanymarService.saveGroqApiKey(groqApiKey);
+      setGroqApiKey("");
+      setGroq((current) => ({
+        configured: current?.configured ?? false,
+        health: current?.health ?? null,
+        apiKeyConfigured: status.apiKeyConfigured,
+        message: status.message,
+      }));
       setMessage(status.message);
       setError(null);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
-      setOllamaBusy(false);
+      setGroqBusy(false);
+    }
+  };
+
+  const deleteGroqKey = async () => {
+    setGroqBusy(true);
+    setMessage(null);
+    try {
+      const status = await sanymarService.deleteGroqApiKey();
+      setGroq(null);
+      setMessage(status.message);
+      setError(null);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setGroqBusy(false);
+    }
+  };
+
+  const checkGroq = async () => {
+    setGroqBusy(true);
+    setMessage(null);
+    try {
+      const saved = await save();
+      if (!saved) return;
+      const status = await sanymarService.getGroqStatus();
+      setGroq(status);
+      setMessage(status.message);
+      setError(null);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setGroqBusy(false);
     }
   };
 
@@ -242,60 +283,82 @@ export function SettingsPage() {
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Script generator</p>
-            <h2>Local Ollama</h2>
+            <h2>Dialogue model</h2>
           </div>
           <span
             className={
-              ollama?.health?.modelInstalled
-                ? "connection-good"
-                : "connection-muted"
+              groq?.health?.ready ? "connection-good" : "connection-muted"
             }
           >
-            {ollama?.health?.modelInstalled ? "Ready" : "Not checked"}
+            {groq?.health?.ready ? "Ready" : "Not checked"}
           </span>
         </div>
+        <p className="fine-print">
+          Sanymar currently uses cloud Qwen through Groq for dialogue
+          generation. Local Ollama is disabled while this endpoint is tested.
+        </p>
         <label>
-          Ollama base URL
+          Groq base URL
           <input
-            value={settings.ollamaBaseUrl}
-            onChange={(event) =>
-              setSettings({ ...settings, ollamaBaseUrl: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Ollama model
-          <input
-            value={settings.ollamaModel ?? ""}
-            placeholder="Not selected"
+            value={settings.groqBaseUrl}
             onChange={(event) =>
               setSettings({
                 ...settings,
-                ollamaModel: event.target.value || null,
+                scriptGeneratorProvider: "groq_qwen",
+                useOllama: false,
+                groqBaseUrl: event.target.value,
               })
             }
           />
         </label>
-        <p className="fine-print">
-          Sanymar connects only to a local loopback URL. It will never download
-          or install a model for you.
-        </p>
-        <label className="checkbox-row">
+        <label>
+          Groq Qwen model
           <input
-            type="checkbox"
-            checked={settings.useOllama}
+            value={settings.groqModel ?? ""}
+            placeholder="qwen/qwen3.6-27b"
             onChange={(event) =>
-              setSettings({ ...settings, useOllama: event.target.checked })
+              setSettings({
+                ...settings,
+                scriptGeneratorProvider: "groq_qwen",
+                useOllama: false,
+                groqModel: event.target.value || null,
+              })
             }
           />
-          Use real local Ollama instead of the mock script generator
         </label>
+        <label>
+          Groq API key
+          <input
+            type="password"
+            autoComplete="off"
+            value={groqApiKey}
+            placeholder={
+              groq?.apiKeyConfigured
+                ? "Saved in Windows Credential Manager"
+                : ""
+            }
+            onChange={(event) => setGroqApiKey(event.target.value)}
+          />
+        </label>
+        <p className="fine-print">
+          The key is saved in Windows Credential Manager and is never stored in
+          SQLite, logs, or the frontend.
+        </p>
         <div className="actions">
           <button
-            disabled={ollamaBusy || !settings.ollamaModel}
-            onClick={() => void checkOllama()}
+            disabled={groqBusy || !groqApiKey.trim()}
+            onClick={() => void saveGroqKey()}
           >
-            {ollamaBusy ? "Checking Ollama..." : "Check Ollama"}
+            {groqBusy ? "Saving..." : "Save Groq key"}
+          </button>
+          <button
+            disabled={groqBusy || !settings.groqModel}
+            onClick={() => void checkGroq()}
+          >
+            {groqBusy ? "Checking Groq..." : "Check Groq Qwen"}
+          </button>
+          <button disabled={groqBusy} onClick={() => void deleteGroqKey()}>
+            Remove Groq key
           </button>
         </div>
       </section>

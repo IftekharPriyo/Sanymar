@@ -13,7 +13,7 @@ use crate::{
         synthesize_recent_script, AppState, PreparedAudio, SpeechResultView,
     },
     errors::AppError,
-    music_provider::{MusicProvider, PlaybackInterruption, PlaybackState},
+    music_provider::{MusicProvider, MusicProviderError, PlaybackInterruption, PlaybackState},
     settings::AppSettings,
 };
 
@@ -23,7 +23,12 @@ const PREPARATION_TIMEOUT: Duration = Duration::from_secs(180);
 const PLAYBACK_TIMEOUT_GRACE: Duration = Duration::from_secs(20);
 const MAX_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(120);
 const TRANSITION_ARM_WINDOW_MS: u64 = 6_000;
-const PAUSE_COMMAND_LEAD_MS: u64 = 750;
+const PAUSE_COMMAND_LEAD_MS: u64 = 250;
+const PAUSE_BOUNDARY_TOLERANCE_MS: u64 = 400;
+const PAUSE_BOUNDARY_GRACE: Duration = Duration::from_secs(3);
+const PAUSE_CONFIRM_POLL: Duration = Duration::from_millis(150);
+const PAUSE_CONFIRM_ATTEMPTS: usize = 5;
+const PAUSE_COMMAND_ATTEMPTS: usize = 2;
 const TRACK_HANDOFF_POLL: Duration = Duration::from_millis(100);
 const TRACK_HANDOFF_ATTEMPTS: usize = 30;
 const AUDIO_STOP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -349,21 +354,23 @@ async fn play_transition_at_boundary(
     key: TransitionKey,
 ) -> Result<SpeechResultView, AppError> {
     let remaining = remaining_ms(&initial_playback).ok_or(AppError::StaleJob)?;
-    let delay = Duration::from_millis(remaining.saturating_sub(PAUSE_COMMAND_LEAD_MS));
-    tokio::select! {
-        () = tokio::time::sleep(delay) => {}
-        () = prepared.cancellation.cancelled() => return Err(AppError::Cancelled),
-    }
-
     let state = app.state::<AppState>();
+    let settings = state.settings.read().await.clone();
+    let provider = spotify_provider(&settings, state.credential_store.clone())?;
+    let boundary_playback = wait_for_pause_boundary(
+        &provider,
+        initial_playback,
+        &key,
+        remaining,
+        &prepared.cancellation,
+    )
+    .await?;
     state
         .coordinator
         .write()
         .await
         .transition(crate::rj_engine::BroadcastState::PausingMusic);
-    let settings = state.settings.read().await.clone();
-    let provider = spotify_provider(&settings, state.credential_store.clone())?;
-    let device_id = initial_playback
+    let device_id = boundary_playback
         .device
         .as_ref()
         .and_then(|device| device.id.clone());
@@ -372,25 +379,7 @@ async fn play_transition_at_boundary(
     };
     *state.spotify_interruption.write().await = Some(interruption.clone());
 
-    if let Err(error) = provider.pause(device_id.as_deref()).await {
-        if !matches!(
-            &error,
-            crate::music_provider::MusicProviderError::Timeout
-                | crate::music_provider::MusicProviderError::Unavailable
-        ) {
-            clear_spotify_interruption(&state, &interruption).await;
-        }
-        let pause_error = AppError::Provider(error.to_string());
-        resume_spotify_if_interrupted(&state, &settings).await;
-        return Err(pause_error);
-    }
-    tracing::info!("automatic transition paused Spotify");
-
-    let paused = provider
-        .playback_state()
-        .await
-        .map_err(|error| AppError::Provider(error.to_string()));
-    let paused = match paused {
+    let paused = match pause_and_confirm(&provider, device_id.as_deref(), &key).await {
         Ok(paused) => paused,
         Err(error) => {
             resume_spotify_if_interrupted(&state, &settings).await;
@@ -443,6 +432,137 @@ async fn play_transition_at_boundary(
         (Err(speech_error), Ok(())) => Err(speech_error),
         (Ok(speech), Ok(())) => Ok(speech),
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseBoundaryAction {
+    Ready,
+    Wait(Duration),
+}
+
+fn pause_boundary_action(
+    playback: &PlaybackState,
+    key: &TransitionKey,
+) -> Result<PauseBoundaryAction, AppError> {
+    if !playback.is_playing {
+        return Err(AppError::Cancelled);
+    }
+    let track_id = playback
+        .current_track
+        .as_ref()
+        .map(|track| track.provider_id.as_str())
+        .ok_or(AppError::StaleJob)?;
+    if track_id == key.next_track_id {
+        return Ok(PauseBoundaryAction::Ready);
+    }
+    if track_id != key.current_track_id {
+        return Err(AppError::StaleJob);
+    }
+    let remaining = remaining_ms(playback).ok_or(AppError::StaleJob)?;
+    if remaining <= PAUSE_BOUNDARY_TOLERANCE_MS {
+        Ok(PauseBoundaryAction::Ready)
+    } else {
+        Ok(PauseBoundaryAction::Wait(Duration::from_millis(
+            remaining.saturating_sub(PAUSE_COMMAND_LEAD_MS),
+        )))
+    }
+}
+
+async fn wait_for_pause_boundary(
+    provider: &impl MusicProvider,
+    mut playback: PlaybackState,
+    key: &TransitionKey,
+    initial_remaining_ms: u64,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<PlaybackState, AppError> {
+    let deadline =
+        Instant::now() + Duration::from_millis(initial_remaining_ms) + PAUSE_BOUNDARY_GRACE;
+    loop {
+        match pause_boundary_action(&playback, key)? {
+            PauseBoundaryAction::Ready => return Ok(playback),
+            PauseBoundaryAction::Wait(delay) => {
+                if Instant::now() >= deadline {
+                    return Err(AppError::Provider(
+                        "Spotify progress did not reach the transition boundary".into(),
+                    ));
+                }
+                tokio::select! {
+                    () = tokio::time::sleep(delay.min(deadline.saturating_duration_since(Instant::now()))) => {}
+                    () = cancellation.cancelled() => return Err(AppError::Cancelled),
+                }
+                playback = provider
+                    .playback_state()
+                    .await
+                    .map_err(|error| AppError::Provider(error.to_string()))?;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseConfirmation {
+    Confirmed,
+    StillPlaying,
+}
+
+fn pause_confirmation(
+    playback: &PlaybackState,
+    key: &TransitionKey,
+) -> Result<PauseConfirmation, AppError> {
+    let track_id = playback
+        .current_track
+        .as_ref()
+        .map(|track| track.provider_id.as_str())
+        .ok_or(AppError::StaleJob)?;
+    if track_id != key.current_track_id && track_id != key.next_track_id {
+        return Err(AppError::StaleJob);
+    }
+    if playback.is_playing {
+        Ok(PauseConfirmation::StillPlaying)
+    } else {
+        Ok(PauseConfirmation::Confirmed)
+    }
+}
+
+async fn pause_and_confirm(
+    provider: &impl MusicProvider,
+    device_id: Option<&str>,
+    key: &TransitionKey,
+) -> Result<PlaybackState, AppError> {
+    let mut last_error: Option<MusicProviderError> = None;
+    for command_attempt in 0..PAUSE_COMMAND_ATTEMPTS {
+        match provider.pause(device_id).await {
+            Ok(()) => last_error = None,
+            Err(error @ (MusicProviderError::Timeout | MusicProviderError::Unavailable)) => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(AppError::Provider(error.to_string())),
+        }
+
+        for confirmation_attempt in 0..PAUSE_CONFIRM_ATTEMPTS {
+            match provider.playback_state().await {
+                Ok(playback) => match pause_confirmation(&playback, key)? {
+                    PauseConfirmation::Confirmed => {
+                        tracing::info!("automatic transition confirmed Spotify is paused");
+                        return Ok(playback);
+                    }
+                    PauseConfirmation::StillPlaying => {}
+                },
+                Err(error) => last_error = Some(error),
+            }
+            if confirmation_attempt + 1 < PAUSE_CONFIRM_ATTEMPTS {
+                tokio::time::sleep(PAUSE_CONFIRM_POLL).await;
+            }
+        }
+        if command_attempt + 1 < PAUSE_COMMAND_ATTEMPTS {
+            tracing::warn!("Spotify pause was not confirmed; retrying once");
+        }
+    }
+
+    Err(AppError::Provider(last_error.map_or_else(
+        || "Spotify did not confirm that playback paused".into(),
+        |error| error.to_string(),
+    )))
 }
 
 async fn wait_for_track_handoff(
@@ -577,8 +697,64 @@ fn abort_task<T>(task: &mut Option<WatchedTask<T>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+
     use super::*;
-    use crate::music_provider::{Track, TrackVariant};
+    use crate::music_provider::{AuthenticationStatus, Track, TrackVariant};
+
+    struct PauseTestProvider {
+        pause_calls: AtomicUsize,
+        fail_first_pause: AtomicBool,
+        observed_playing: bool,
+    }
+
+    #[async_trait]
+    impl MusicProvider for PauseTestProvider {
+        async fn authenticate(&self) -> Result<(), MusicProviderError> {
+            Ok(())
+        }
+
+        async fn authentication_status(&self) -> Result<AuthenticationStatus, MusicProviderError> {
+            Ok(AuthenticationStatus::Connected)
+        }
+
+        async fn playback_state(&self) -> Result<PlaybackState, MusicProviderError> {
+            let mut state = playback(199_900, 200_000);
+            state.is_playing = self.observed_playing;
+            Ok(state)
+        }
+
+        async fn pause(&self, _device_id: Option<&str>) -> Result<(), MusicProviderError> {
+            self.pause_calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_first_pause.swap(false, Ordering::SeqCst) {
+                Err(MusicProviderError::Timeout)
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn resume(&self, _device_id: Option<&str>) -> Result<(), MusicProviderError> {
+            Ok(())
+        }
+
+        async fn seek(
+            &self,
+            _position_ms: u64,
+            _device_id: Option<&str>,
+        ) -> Result<(), MusicProviderError> {
+            Ok(())
+        }
+
+        async fn skip(&self, _device_id: Option<&str>) -> Result<(), MusicProviderError> {
+            Ok(())
+        }
+
+        async fn refresh_authentication(&self) -> Result<(), MusicProviderError> {
+            Ok(())
+        }
+    }
 
     fn playback(progress_ms: u64, duration_ms: u64) -> PlaybackState {
         let track = |id: &str, duration_ms| Track {
@@ -644,6 +820,108 @@ mod tests {
         assert_eq!(
             transition_timeout(Some(u64::MAX), Some(u64::MAX)),
             MAX_PLAYBACK_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn pause_boundary_rechecks_stale_progress_before_pausing() {
+        let key = TransitionKey {
+            current_track_id: "current".into(),
+            next_track_id: "next".into(),
+        };
+        assert_eq!(
+            pause_boundary_action(&playback(198_000, 200_000), &key)
+                .unwrap_or_else(|error| panic!("boundary action failed: {error}")),
+            PauseBoundaryAction::Wait(Duration::from_millis(1_750))
+        );
+        assert_eq!(
+            pause_boundary_action(&playback(199_700, 200_000), &key)
+                .unwrap_or_else(|error| panic!("boundary action failed: {error}")),
+            PauseBoundaryAction::Ready
+        );
+    }
+
+    #[test]
+    fn pause_boundary_accepts_the_expected_track_but_rejects_unrelated_tracks() {
+        let key = TransitionKey {
+            current_track_id: "current".into(),
+            next_track_id: "next".into(),
+        };
+        let mut advanced = playback(20, 200_000);
+        if let Some(track) = advanced.current_track.as_mut() {
+            track.provider_id = "next".into();
+        }
+        assert_eq!(
+            pause_boundary_action(&advanced, &key)
+                .unwrap_or_else(|error| panic!("advanced track should be accepted: {error}")),
+            PauseBoundaryAction::Ready
+        );
+
+        if let Some(track) = advanced.current_track.as_mut() {
+            track.provider_id = "unrelated".into();
+        }
+        assert!(matches!(
+            pause_boundary_action(&advanced, &key),
+            Err(AppError::StaleJob)
+        ));
+    }
+
+    #[test]
+    fn pause_confirmation_requires_observed_paused_state() {
+        let key = TransitionKey {
+            current_track_id: "current".into(),
+            next_track_id: "next".into(),
+        };
+        let playing = playback(199_900, 200_000);
+        assert_eq!(
+            pause_confirmation(&playing, &key)
+                .unwrap_or_else(|error| panic!("playing state should be recognized: {error}")),
+            PauseConfirmation::StillPlaying
+        );
+        let mut paused = playing;
+        paused.is_playing = false;
+        assert_eq!(
+            pause_confirmation(&paused, &key)
+                .unwrap_or_else(|error| panic!("paused state should be recognized: {error}")),
+            PauseConfirmation::Confirmed
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_pause_is_reconciled_before_retry_or_recovery() {
+        let provider = PauseTestProvider {
+            pause_calls: AtomicUsize::new(0),
+            fail_first_pause: AtomicBool::new(true),
+            observed_playing: false,
+        };
+        let key = TransitionKey {
+            current_track_id: "current".into(),
+            next_track_id: "next".into(),
+        };
+
+        let paused = pause_and_confirm(&provider, None, &key)
+            .await
+            .unwrap_or_else(|error| panic!("timed-out accepted pause should reconcile: {error}"));
+        assert!(!paused.is_playing);
+        assert_eq!(provider.pause_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_pause_retries_once_then_fails() {
+        let provider = PauseTestProvider {
+            pause_calls: AtomicUsize::new(0),
+            fail_first_pause: AtomicBool::new(false),
+            observed_playing: true,
+        };
+        let key = TransitionKey {
+            current_track_id: "current".into(),
+            next_track_id: "next".into(),
+        };
+
+        assert!(pause_and_confirm(&provider, None, &key).await.is_err());
+        assert_eq!(
+            provider.pause_calls.load(Ordering::SeqCst),
+            PAUSE_COMMAND_ATTEMPTS
         );
     }
 }

@@ -28,7 +28,7 @@ export function DashboardPage() {
             <StatusPill label="Mock script generator" tone="warning" />
           )}
           {!dashboard.llmMockMode && (
-            <StatusPill label="Local Ollama" tone="good" />
+            <StatusPill label="Real script model" tone="good" />
           )}
           {dashboard.ttsMockMode ? (
             <StatusPill label="Mock TTS" tone="warning" />
@@ -79,7 +79,7 @@ export function DashboardPage() {
                 ? "Working…"
                 : dashboard.llmMockMode
                   ? "Generate mock segment"
-                  : "Generate with Ollama"}
+                  : "Generate with model"}
             </button>
             <button
               disabled={busy || !dashboard.recentScript}
@@ -89,7 +89,7 @@ export function DashboardPage() {
             </button>
           </div>
           <p className="fine-print">
-            Script mode: {dashboard.llmMockMode ? "mock" : "local Ollama"}.{" "}
+            Script mode: {dashboard.llmMockMode ? "mock" : dashboard.llmStatus}.{" "}
             {dashboard.ttsMockMode
               ? "Speech synthesis and playback are simulated."
               : "Kokoro generates a real WAV; device playback is still simulated."}

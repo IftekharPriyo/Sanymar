@@ -10,14 +10,16 @@ Sanymar persists typed, non-secret application settings in local SQLite. Spotify
 
 ## Script generation
 
-- `useOllama`: when disabled, deterministic `MockScriptGenerator` remains active. When enabled, the local Ollama adapter implements the same `ScriptGenerator` trait.
-- `ollamaBaseUrl`: must be an HTTP loopback URL (`127.0.0.1`, `localhost`, or another loopback IP) with an explicit port and no path, credentials, query, or fragment. Default: `http://127.0.0.1:11434`.
-- `ollamaModel`: exact name of an already installed model, including a tag where applicable. Sanymar checks `/api/tags` but never downloads a missing model.
+- `scriptGeneratorProvider`: normal setup writes `groq_qwen`. The `mock` and `ollama` values are retained only for development/backward compatibility while the Groq endpoint is tested.
+- `useOllama`: legacy compatibility flag retained for older settings. Normalization turns it off and moves old Ollama selections to `groq_qwen`.
+- `ollamaBaseUrl` and `ollamaModel`: legacy fields retained for compatibility. They are not shown in normal setup.
+- `groqBaseUrl`: HTTPS Groq OpenAI-compatible base URL. Default: `https://api.groq.com/openai/v1/`.
+- `groqModel`: Groq-hosted Qwen chat model ID. Default: `qwen/qwen3.6-27b`.
 - `maximumSegmentWords`: hard validation limit from 1 to 150 words. The editorial target may be shorter.
 
-Use **Check Ollama** after saving the base URL and model. A ready result means `/api/version` was reachable and `/api/tags` contained the exact configured model name. Enabling Ollama requires a model name, but saving does not automatically contact, install, or start Ollama.
+Use **Save Groq key** to store the Groq API key in Windows Credential Manager, then **Check Groq Qwen** to verify authentication and model access. The key is not part of `AppSettings`, is never returned to React, and is not stored in SQLite.
 
-Generation is deterministic (`temperature: 0`) and strictly validated. If a draft violates the JSON contract, word limit, recent-phrase exclusions, formatting rules, or verified-fact references, Sanymar makes one corrective retry. Over-length drafts retry at 75% of `maximumSegmentWords`. If the corrected output remains locally invalid, the segment safely becomes silence; provider and configuration failures remain visible. Rejected drafts are never displayed, resent, or logged.
+Generation is deterministic (`temperature: 0`) and strictly validated for Groq. Sanymar sends `reasoning_effort: "none"` for Qwen so the provider returns the usable answer instead of `<think>...</think>` traces. Sanymar asks for JSON in the prompt and enforces the schema locally instead of using Groq provider-enforced JSON mode for Qwen. If a draft violates the JSON contract, word limit, recent-phrase exclusions, formatting rules, or verified-fact references, Sanymar makes one corrective retry. Over-length drafts retry at 75% of `maximumSegmentWords`. If the corrected output remains locally invalid, the segment safely becomes silence; provider, authentication, rate-limit, timeout, cancellation, and configuration failures remain visible. Rejected drafts are never displayed, resent, or logged.
 
 ## Other foundation settings
 

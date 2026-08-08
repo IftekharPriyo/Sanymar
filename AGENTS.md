@@ -2,7 +2,7 @@
 
 ## Purpose and phase
 
-Sanymar is a local-first Windows desktop AI radio jockey. The current phase includes the reviewable foundation, Spotify playback monitoring through PKCE, optional local Ollama generation, unattended confidence-gated MusicBrainz metadata, bundled English Kokoro synthesis, development-only Parler-TTS Mini synthesis, default-device voice playback, and opt-in pre-rendered transition speech with recovery-aware pause/skip/seek/resume. General Spotify controls are not exposed. Listener setup should require only Spotify authorization and user-managed Ollama; provider modes remain independently selectable in development and all offline mocks must be preserved.
+Sanymar is a Windows desktop AI radio jockey. The current phase includes the reviewable foundation, Spotify playback monitoring through PKCE, active cloud Qwen generation through Groq, a retained development-only Ollama adapter, unattended confidence-gated MusicBrainz metadata, bundled English Kokoro synthesis, development-only Parler-TTS Mini synthesis, default-device voice playback, and opt-in pre-rendered transition speech with recovery-aware pause/skip/seek/resume. General Spotify controls are not exposed. Listener setup should require only Spotify authorization plus a user-provided Groq API key; provider modes remain independently selectable in development and all offline mocks must be preserved.
 
 Before changing code, read this file, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, and the relevant module. Project-focused references live in `.agents/skills/` even if the active agent does not discover them automatically.
 
@@ -57,6 +57,7 @@ Run formatting, linting, tests, and compilation checks appropriate to a change. 
 - Ollama adapters must remain loopback-only, must not auto-install models, and must never log complete prompts.
 - Ollama output correction is limited to one validation-only retry; never include the rejected model response in that retry or weaken the final validator.
 - A final locally invalid Ollama result must fail soft to an explicitly silent segment; do not hide provider, configuration, timeout, or cancellation failures under that policy.
+- Groq Qwen adapters must use HTTPS, store API keys only in OS credential storage, never log or return keys, send only the sanitized script request, and preserve the same strict validation/correction policy as Ollama.
 - MusicBrainz lookup is cache-first, contact-identified, rate-limited, and unattended. Ambiguous matches fall back to no facts; do not add a mandatory review workflow.
 - The reviewed English Kokoro pack is an installer-managed asset with retained third-party notices. Release tooling may stage only its fixed official archive after pinned size/SHA-256 verification; never commit its binary pack to ordinary Git. The installed application must validate it at runtime and never replace or download it. Other TTS models remain explicit user-managed assets. Never accept voice cloning/reference audio or write generated audio outside the application cache.
 - Keep TTS delivery intent typed and provider-neutral. Preserve the user's selected voice, bound adapter-specific prosody controls, and do not describe pacing-only Kokoro output as genuine emotion synthesis.

@@ -16,6 +16,7 @@ use crate::{
     database::{Database, GeneratedScriptRecord},
     errors::{AppError, CommandError},
     llm::{
+        groq::{GroqConfiguration, GroqHealth, GroqScriptGenerator},
         mock::MockScriptGenerator,
         ollama::{OllamaConfiguration, OllamaHealth, OllamaScriptGenerator},
         ScriptGenerator, ScriptGeneratorError, ScriptRequest,
@@ -33,8 +34,8 @@ use crate::{
         normalize_for_speech, BroadcastCoordinator, BroadcastMemory, BroadcastState,
         ContentDirector, DjProfile, ScriptValidator, SegmentType,
     },
-    security::CredentialStore,
-    settings::{AppSettings, TtsProviderSetting},
+    security::{Credential, CredentialStore, CredentialStoreError},
+    settings::{AppSettings, ScriptGeneratorProviderSetting, TtsProviderSetting},
     spotify::{
         api::SpotifyProvider,
         auth::{SpotifyAuthService, SpotifyConnectionStatus},
@@ -49,6 +50,7 @@ use crate::{
 };
 
 const BUNDLED_KOKORO_DIRECTORY: &str = "models/kokoro-en-v0_19";
+const GROQ_CREDENTIAL_PROVIDER: &str = "groq";
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedScript {
@@ -169,7 +171,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardView, 
                 .map(|track| track.provider_id.as_str()),
         );
     }
-    let llm_mock_mode = !settings.use_ollama;
+    let llm_mock_mode = settings.script_generator_provider == ScriptGeneratorProviderSetting::Mock;
     Ok(DashboardView {
         mock_mode: settings.mock_mode,
         llm_mock_mode,
@@ -180,17 +182,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardView, 
         broadcast_state,
         dj_profile: DjProfile::default(),
         talk_frequency: format!("{:?}", settings.talk_frequency),
-        llm_status: if settings.use_ollama {
-            format!(
-                "Ollama: {} (health not checked)",
-                settings
-                    .ollama_model
-                    .as_deref()
-                    .unwrap_or("model not selected")
-            )
-        } else {
-            "Mock script generator ready".into()
-        },
+        llm_status: llm_status_label(&settings),
         tts_status: match settings.tts_provider {
             TtsProviderSetting::Mock => "Mock TTS ready (no audio generated)".into(),
             TtsProviderSetting::SherpaKokoro => {
@@ -301,7 +293,7 @@ pub(crate) async fn generate_segment_for_playback(
             dialogue: None,
             segment_type: SegmentType::Silence,
             broadcast_state: "Monitoring".into(),
-            is_mock: !settings.use_ollama,
+            is_mock: settings.script_generator_provider == ScriptGeneratorProviderSetting::Mock,
         });
     }
 
@@ -325,24 +317,11 @@ pub(crate) async fn generate_segment_for_playback(
         maximum_words: settings.maximum_segment_words,
         cancellation,
     };
-    let generation_result = if settings.use_ollama {
-        let model = settings
-            .ollama_model
-            .as_deref()
-            .ok_or_else(|| AppError::Configuration("select an Ollama model in Settings".into()))?;
-        let configuration = OllamaConfiguration::new(&settings.ollama_base_url, model)
-            .map_err(|error| AppError::Configuration(error.to_string()))?;
-        OllamaScriptGenerator::new(configuration)
-            .map_err(|error| AppError::Configuration(error.to_string()))?
-            .generate(request)
-            .await
-    } else {
-        MockScriptGenerator.generate(request).await
-    };
+    let generation_result = generate_with_configured_provider(&settings, state, request).await;
     let candidates = match generation_result {
         Ok(candidates) => candidates,
         Err(error) if should_fall_back_to_silence(&error) => {
-            tracing::warn!(reason = %error, "Ollama output failed validation; continuing with silence");
+            tracing::warn!(reason = %error, "script generator output failed validation; continuing with silence");
             state
                 .coordinator
                 .write()
@@ -353,7 +332,7 @@ pub(crate) async fn generate_segment_for_playback(
                 dialogue: None,
                 segment_type: SegmentType::Silence,
                 broadcast_state: "Monitoring".into(),
-                is_mock: false,
+                is_mock: settings.script_generator_provider == ScriptGeneratorProviderSetting::Mock,
             });
         }
         Err(error) => return Err(AppError::ScriptGeneration(error.to_string())),
@@ -429,8 +408,61 @@ pub(crate) async fn generate_segment_for_playback(
         dialogue: Some(candidate.dialogue),
         segment_type: plan.segment_type,
         broadcast_state: "Waiting for transition".into(),
-        is_mock: !settings.use_ollama,
+        is_mock: settings.script_generator_provider == ScriptGeneratorProviderSetting::Mock,
     })
+}
+
+async fn generate_with_configured_provider(
+    settings: &AppSettings,
+    state: &AppState,
+    request: ScriptRequest,
+) -> Result<Vec<crate::llm::ScriptCandidate>, ScriptGeneratorError> {
+    match settings.script_generator_provider {
+        ScriptGeneratorProviderSetting::Mock => MockScriptGenerator.generate(request).await,
+        ScriptGeneratorProviderSetting::Ollama => {
+            let model = settings
+                .ollama_model
+                .as_deref()
+                .ok_or(ScriptGeneratorError::InvalidConfiguration)?;
+            let configuration = OllamaConfiguration::new(&settings.ollama_base_url, model)?;
+            OllamaScriptGenerator::new(configuration)?
+                .generate(request)
+                .await
+        }
+        ScriptGeneratorProviderSetting::GroqQwen => {
+            let model = settings
+                .groq_model
+                .as_deref()
+                .ok_or(ScriptGeneratorError::InvalidConfiguration)?;
+            let api_key = load_groq_api_key(state.credential_store.as_ref())
+                .await
+                .map_err(|_| ScriptGeneratorError::Authentication)?;
+            let configuration = GroqConfiguration::new(&settings.groq_base_url, model, &api_key)?;
+            GroqScriptGenerator::new(configuration)?
+                .generate(request)
+                .await
+        }
+    }
+}
+
+fn llm_status_label(settings: &AppSettings) -> String {
+    match settings.script_generator_provider {
+        ScriptGeneratorProviderSetting::Mock => "Mock script generator ready".into(),
+        ScriptGeneratorProviderSetting::Ollama => format!(
+            "Ollama: {} (health not checked)",
+            settings
+                .ollama_model
+                .as_deref()
+                .unwrap_or("model not selected")
+        ),
+        ScriptGeneratorProviderSetting::GroqQwen => format!(
+            "Groq Qwen: {} (health not checked)",
+            settings
+                .groq_model
+                .as_deref()
+                .unwrap_or("model not selected")
+        ),
+    }
 }
 
 fn record_silence(memory: &mut BroadcastMemory) {
@@ -484,6 +516,22 @@ pub struct OllamaStatusView {
     pub message: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroqStatusView {
+    pub configured: bool,
+    pub api_key_configured: bool,
+    pub health: Option<GroqHealth>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroqKeyStatusView {
+    pub api_key_configured: bool,
+    pub message: String,
+}
+
 #[tauri::command]
 pub async fn get_ollama_status(
     state: State<'_, AppState>,
@@ -514,6 +562,123 @@ pub async fn get_ollama_status(
         health: Some(health),
         message: message.into(),
     })
+}
+
+#[tauri::command]
+pub async fn save_groq_api_key(
+    api_key: String,
+    state: State<'_, AppState>,
+) -> Result<GroqKeyStatusView, CommandError> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() || api_key.len() > 512 || api_key.chars().any(char::is_control) {
+        return Err(AppError::Configuration("Groq API key is invalid".into()).into());
+    }
+    state
+        .credential_store
+        .save(
+            GROQ_CREDENTIAL_PROVIDER,
+            Credential {
+                access_token: api_key.to_owned(),
+                refresh_token: None,
+                expires_at: None,
+                scopes: Vec::new(),
+            },
+        )
+        .await
+        .map_err(map_credential_error)?;
+    Ok(GroqKeyStatusView {
+        api_key_configured: true,
+        message: "Groq API key saved in Windows Credential Manager.".into(),
+    })
+}
+
+#[tauri::command]
+pub async fn delete_groq_api_key(
+    state: State<'_, AppState>,
+) -> Result<GroqKeyStatusView, CommandError> {
+    state
+        .credential_store
+        .delete(GROQ_CREDENTIAL_PROVIDER)
+        .await
+        .map_err(map_credential_error)?;
+    Ok(GroqKeyStatusView {
+        api_key_configured: false,
+        message: "Groq API key removed.".into(),
+    })
+}
+
+#[tauri::command]
+pub async fn get_groq_status(state: State<'_, AppState>) -> Result<GroqStatusView, CommandError> {
+    let settings = state.settings.read().await.clone();
+    let Some(model) = settings.groq_model.as_deref() else {
+        return Ok(GroqStatusView {
+            configured: false,
+            api_key_configured: has_groq_api_key(state.credential_store.as_ref()).await,
+            health: None,
+            message: "Select a Groq Qwen model to check cloud generation".into(),
+        });
+    };
+    let api_key = match load_groq_api_key(state.credential_store.as_ref()).await {
+        Ok(api_key) => api_key,
+        Err(CredentialStoreError::NotFound) => {
+            return Ok(GroqStatusView {
+                configured: false,
+                api_key_configured: false,
+                health: None,
+                message: "Save a Groq API key before checking cloud Qwen".into(),
+            });
+        }
+        Err(error) => return Err(map_credential_error(error).into()),
+    };
+    let configuration = GroqConfiguration::new(&settings.groq_base_url, model, &api_key)
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+    let health = GroqScriptGenerator::new(configuration)
+        .map_err(|error| AppError::Configuration(error.to_string()))?
+        .health_check()
+        .await
+        .map_err(|error| AppError::Provider(error.to_string()))?;
+    let message = if health.model_available && health.ready {
+        "Groq Qwen is reachable, authenticated, and returning JSON"
+    } else if health.model_available {
+        "Groq Qwen is reachable and authenticated, but the JSON probe failed"
+    } else {
+        "Groq is reachable and authenticated, but the configured model was not listed"
+    };
+    Ok(GroqStatusView {
+        configured: true,
+        api_key_configured: true,
+        health: Some(health),
+        message: message.into(),
+    })
+}
+
+async fn has_groq_api_key(credential_store: &dyn CredentialStore) -> bool {
+    load_groq_api_key(credential_store).await.is_ok()
+}
+
+async fn load_groq_api_key(
+    credential_store: &dyn CredentialStore,
+) -> Result<String, CredentialStoreError> {
+    let credential = credential_store.load(GROQ_CREDENTIAL_PROVIDER).await?;
+    if credential.access_token.trim().is_empty() {
+        Err(CredentialStoreError::Invalid)
+    } else {
+        Ok(credential.access_token)
+    }
+}
+
+fn map_credential_error(error: CredentialStoreError) -> AppError {
+    match error {
+        CredentialStoreError::NotFound => {
+            AppError::Authentication("Groq API key is not saved".into())
+        }
+        CredentialStoreError::Unavailable => {
+            AppError::Authentication("credential storage is unavailable".into())
+        }
+        CredentialStoreError::Invalid => {
+            AppError::Authentication("stored credential is invalid".into())
+        }
+    }
 }
 
 #[tauri::command]

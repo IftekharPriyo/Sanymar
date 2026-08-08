@@ -96,6 +96,7 @@ export interface SpotifyConnectionStatus {
 
 export type TalkFrequency = "minimal" | "normal" | "talkative";
 export type TtsProvider = "mock" | "sherpa_kokoro" | "parler_mini";
+export type ScriptGeneratorProvider = "mock" | "ollama" | "groq_qwen";
 
 export interface AppSettings {
   settingsVersion: number;
@@ -105,6 +106,9 @@ export interface AppSettings {
   ollamaBaseUrl: string;
   ollamaModel: string | null;
   useOllama: boolean;
+  scriptGeneratorProvider: ScriptGeneratorProvider;
+  groqBaseUrl: string;
+  groqModel: string | null;
   djProfileId: string;
   talkFrequency: TalkFrequency;
   maximumSegmentWords: number;
@@ -133,6 +137,26 @@ export interface OllamaHealth {
 export interface OllamaStatus {
   configured: boolean;
   health: OllamaHealth | null;
+  message: string;
+}
+
+export interface GroqHealth {
+  reachable: boolean;
+  authenticated: boolean;
+  model: string;
+  modelAvailable: boolean;
+  ready: boolean;
+}
+
+export interface GroqStatus {
+  configured: boolean;
+  apiKeyConfigured: boolean;
+  health: GroqHealth | null;
+  message: string;
+}
+
+export interface GroqKeyStatus {
+  apiKeyConfigured: boolean;
   message: string;
 }
 

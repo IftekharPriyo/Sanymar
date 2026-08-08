@@ -1,6 +1,6 @@
 # Sanymar
 
-Sanymar is a local-first Windows desktop AI radio jockey. It observes authorized Spotify playback, writes short English radio dialogue locally, synthesizes it with a local voice provider, and plays the result through the Windows default audio device.
+Sanymar is a Windows desktop AI radio jockey. It observes authorized Spotify playback, writes short English radio dialogue with either a mock, local Ollama, or cloud Qwen provider, synthesizes it with a local voice provider, and plays the result through the Windows default audio device.
 
 ## Current status
 
@@ -8,7 +8,7 @@ The application currently supports:
 
 - offline mock Spotify, script, TTS, and audio providers for development;
 - Spotify Authorization Code with PKCE, Windows Credential Manager token storage, and normalized current/queued-track monitoring;
-- optional loopback-only Ollama generation through `/api/chat` with structured output, validation, one bounded corrective retry, and cancellation;
+- cloud Qwen generation through Groq's OpenAI-compatible chat-completions API, with prompt minimization, validation, retry, timeout, and cancellation;
 - unattended, cache-first MusicBrainz first-release metadata with conservative matching;
 - bundled English Kokoro synthesis in-process through Sherpa-ONNX, with Parler retained only as a development override;
 - validated WAV playback on the Windows default audio device; and
@@ -29,7 +29,7 @@ Spotify, facts, script generation, TTS, audio, and credential storage are behind
 - Rust stable with the MSVC target
 - Microsoft C++ Build Tools with the **Desktop development with C++** workload
 
-Real providers are optional. Spotify requires a Spotify developer application. Ollama and voice models are installed and managed separately by the user. Parler additionally requires a compatible Python, PyTorch, and CUDA environment.
+Real providers are optional. Spotify requires a Spotify developer application. Groq Qwen requires a user-provided Groq API key. The old Ollama adapter is retained in code but disabled from normal setup while the Groq endpoint is tested. Parler additionally requires a compatible Python, PyTorch, and CUDA environment.
 
 ## Run locally
 
@@ -50,7 +50,7 @@ npm.cmd run tauri dev
 
 Mock mode is enabled by default and needs no account, model, TTS engine, or audio device. The UI labels mocked providers, and mock speech produces no sound.
 
-Release builds produce a portable executable directory plus unsigned MSI and NSIS installers. The four pinned Sherpa/ONNX Runtime DLLs are installed beside `sanymar.exe`, and the reviewed English Kokoro pack is installed under `models/kokoro-en-v0_19`. Ollama, Parler, and Python are not bundled.
+Release builds produce a portable executable directory plus unsigned MSI and NSIS installers. The four pinned Sherpa/ONNX Runtime DLLs are installed beside `sanymar.exe`, and the reviewed English Kokoro pack is installed under `models/kokoro-en-v0_19`. Parler, Python, and cloud API keys are not bundled.
 
 Build the Windows packages with:
 
@@ -79,18 +79,18 @@ Sanymar reads the current track, progress, active device, and queue. It does not
 
 The authorization includes `user-modify-playback-state`. Automatic commentary uses it only for device-targeted pause, expected-track advancement, seek-to-start, and resume around the prepared RJ segment; it does not expose general playback controls.
 
-## Local Ollama setup
+## Cloud Qwen via Groq
 
-1. Install and start Ollama separately.
-2. Install a model with Ollama's own tooling. Sanymar never downloads or installs models.
-3. Open **Settings > Local Ollama**.
-4. Keep `http://127.0.0.1:11434` unless Ollama uses another loopback port.
-5. Enter the exact installed model name and select **Check Ollama**.
-6. Enable **Use real local Ollama instead of the mock script generator**, then save.
+1. Create a Groq API key in your Groq account.
+2. Open **Settings > Dialogue model**.
+3. Keep the base URL as `https://api.groq.com/openai/v1/` unless Groq changes its documented endpoint.
+4. Keep `qwen/qwen3.6-27b` or enter another Groq-hosted Qwen chat model ID.
+5. Paste the API key into **Groq API key**, select **Save Groq key**, then select **Check Groq Qwen**.
+6. Save settings.
 
-Spotify credentials are not needed to test Ollama manually. Model requests include normalized DJ and track display fields, segment constraints, recent-memory exclusions, selected station lore, and explicitly verified facts. Provider IDs, artwork URLs, ISRCs, Spotify tokens, credentials, and unrelated user data are excluded.
+The Groq key is stored in Windows Credential Manager, never SQLite, frontend storage, logs, or Git. Sanymar sends the same minimized script request used by Ollama: display names, segment constraints, recent-memory exclusions, selected station lore, and explicitly verified facts. Spotify tokens, provider IDs, artwork URLs, ISRCs, and unrelated settings are excluded.
 
-Generation uses `/api/chat`, `stream: false`, temperature zero, and a strict JSON schema. Malformed or locally invalid output receives one validation-only corrective retry. The rejected response is not included in that retry or logged. A second locally invalid result becomes safe silence; provider, configuration, timeout, and cancellation failures remain visible.
+Groq uses `/chat/completions`, `stream: false`, temperature zero, `reasoning_effort: "none"`, and a prompt-level JSON contract validated locally by Sanymar. Provider-enforced JSON mode is intentionally disabled for Qwen because Groq can reject a whole generation when the model's draft fails its JSON validator. Disabling reasoning mode also prevents Qwen from returning `<think>...</think>` traces before the usable JSON. Malformed or locally invalid output receives one validation-only corrective retry. A second locally invalid result becomes safe silence; authentication, rate-limit, provider, timeout, and cancellation failures remain visible.
 
 Dialogue is written for speech: breath-sized phrases, natural contractions, restrained punctuation, and segment-specific rhythm. Speaker labels, title quotation marks, emoji, Markdown, bracketed emotion tags, and SSML are removed before validation and again before TTS.
 
@@ -109,7 +109,7 @@ MusicBrainz currently supplies only strongly matched first-release-date metadata
 1. Install Sanymar with the NSIS or MSI package; the reviewed `kokoro-en-v0_19` assets are included.
 2. Open **Settings > RJ voice**. The bundled English voice is already selected automatically.
 3. Choose the speech speed and RJ volume, then save. No voice model path or provider process is required.
-4. Use **Generate with Ollama** and **Speak test segment** for a manual end-to-end check.
+4. Use **Generate with model** and **Speak test segment** for a manual end-to-end check.
 
 Sherpa-ONNX `1.13.4` is pinned and uses its Windows shared runtime. Sanymar resolves the installed pack automatically and never downloads or replaces voice assets at runtime. Generated mono PCM WAV files are validated and written only beneath the application cache before default-device playback. The model's Apache-2.0 notice and the eSpeak NG GPL-3.0-or-later notice/source reference travel with the resource pack.
 
@@ -137,7 +137,7 @@ The provider must remain open while selected. Stop it with `Ctrl+C`. Sanymar sen
 
 ## Automatic transition speech
 
-Automatic transition speech requires live Spotify playback and a real TTS provider for audible output. Real Ollama remains independently selectable; the script mock can still be used with live Spotify during development.
+Automatic transition speech requires live Spotify playback and a real TTS provider for audible output. Groq Qwen is the active script generator while the cloud endpoint is tested.
 
 1. Configure and health-check Spotify, the desired script generator, and the desired voice provider.
 2. Enable **Automatically prepare and play speech at Spotify transitions** in **Settings**, then save.
@@ -149,7 +149,7 @@ The service is supervised and uses watchdog deadlines around Spotify polling, sc
 
 A current-track or queue change cancels stale generation, synthesis, or speech, except for the expected handoff into the prepared next track. A recorded interruption is resumed after success, failure, cancellation, watchdog expiry, or worker restart. Timing uses Spotify's polled progress and Web API commands, so a small part of the outgoing tail may be trimmed or the next track may be briefly audible before reset.
 
-**Generate with Ollama** and **Speak test segment** remain available as manual diagnostics.
+**Generate with model** and **Speak test segment** remain available as manual diagnostics.
 
 ## Checks
 
@@ -166,7 +166,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 Apply formatting with `npm.cmd run format` and `cargo fmt --manifest-path src-tauri/Cargo.toml`.
 
-Provider tests use mocks or fake backends and do not require public services, a real Ollama installation, a Kokoro model, Python, CUDA, or an audio device. Native model loading, Spotify behavior, subjective voice quality, and default-device playback remain local integration checks.
+Provider tests use mocks or fake backends and do not require public services, Groq access, a Kokoro model, Python, CUDA, or an audio device. Native model loading, Spotify behavior, subjective voice quality, and default-device playback remain local integration checks.
 
 ## Configuration and logging
 
@@ -183,9 +183,9 @@ Complete prompts, dialogue, provider response bodies, Spotify tokens, authorizat
 
 ## Security and privacy
 
-- Never place Spotify tokens, authorization codes, client secrets, or other credentials in `.env`, source files, SQLite, logs, screenshots, or frontend `localStorage`.
+- Never place Spotify tokens, authorization codes, Groq API keys, client secrets, or other credentials in `.env`, source files, SQLite, logs, screenshots, or frontend `localStorage`.
 - Spotify uses Authorization Code with PKCE and needs no client secret.
-- Ollama and Parler are restricted to loopback HTTP endpoints.
+- Parler is restricted to a loopback HTTP endpoint. Groq Qwen is the only active script provider currently supported in normal setup.
 - Voice models are explicit user-managed assets and are never installed automatically.
 - Reference audio and voice cloning are not supported.
 - Generated audio is confined to the application cache and must pass local validation before playback.
