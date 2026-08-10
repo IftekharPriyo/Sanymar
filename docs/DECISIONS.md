@@ -106,6 +106,8 @@ Treat the packaged Spotify OAuth application identity and bundled Kokoro asset h
 
 Superseded for normal script-provider setup by ADR-027: Groq Qwen is now the active listener-facing script provider, and Ollama is retained only as a development/backward-compatible adapter.
 
+Superseded for the normal voice settings surface: the listener-facing UI now exposes only the selected Kokoro voice actor ID while still hiding engine selection, custom model paths, and model-health diagnostics.
+
 Add a persisted 0-100 RJ-volume percentage with a conservative 75% default. Normalize it to the existing provider-neutral `VoiceSettings.volume` field so Kokoro and Parler share the same validated control. The gain affects generated speech only, not Spotify or system volume. This changes no schema migration because application settings are serialized JSON with a serde default, and adds no dependency.
 
 ## ADR-025: Checksum-pinned Kokoro release-build staging - accepted

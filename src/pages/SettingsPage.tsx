@@ -29,10 +29,17 @@ export function SettingsPage() {
   const [groq, setGroq] = useState<GroqStatus | null>(null);
   const [groqBusy, setGroqBusy] = useState(false);
   const [groqApiKey, setGroqApiKey] = useState("");
+  const [kokoroVoiceCount, setKokoroVoiceCount] = useState(11);
 
   useEffect(() => {
     void sanymarService.getSettings().then(setSettings);
     void sanymarService.getSpotifyConnection().then(setSpotify);
+    void sanymarService.getTtsStatus().then((status) => {
+      const availableVoices = status.health?.availableVoices;
+      if (availableVoices && availableVoices > 0) {
+        setKokoroVoiceCount(availableVoices);
+      }
+    });
   }, []);
 
   if (!settings)
@@ -370,9 +377,28 @@ export function SettingsPage() {
           </div>
         </div>
         <p className="fine-print">
-          Sanymar uses its bundled English voice automatically. No voice model,
-          service, or provider process needs to be configured.
+          Sanymar uses its bundled English voice pack automatically. Choose the
+          voice actor you prefer; no voice model, service, or provider process
+          needs to be configured.
         </p>
+        <label>
+          Voice actor
+          <select
+            value={settings.ttsVoiceId}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                ttsVoiceId: Number(event.target.value),
+              })
+            }
+          >
+            {Array.from({ length: kokoroVoiceCount }, (_, index) => (
+              <option key={index} value={index}>
+                Voice {index + 1}
+              </option>
+            ))}
+          </select>
+        </label>
         <label>
           Speech speed ({settings.ttsSpeedPercent}%)
           <input

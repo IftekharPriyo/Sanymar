@@ -51,8 +51,12 @@ describe("Sanymar mock dashboard", () => {
       ),
     ).toBeDisabled();
     expect(
-      screen.getByText(/uses its bundled English voice automatically/i),
+      screen.getByText(/uses its bundled English voice pack automatically/i),
     ).toBeInTheDocument();
+    const voiceActor = screen.getByLabelText("Voice actor");
+    expect(voiceActor).toBeInTheDocument();
+    expect(voiceActor).toHaveValue("0");
+    expect(screen.getByRole("option", { name: "Voice 11" })).toHaveValue("10");
     expect(screen.queryByLabelText("Voice engine")).not.toBeInTheDocument();
     expect(
       screen.queryByLabelText("Kokoro model directory"),

@@ -107,8 +107,8 @@ MusicBrainz currently supplies only strongly matched first-release-date metadata
 ## English Kokoro setup
 
 1. Install Sanymar with the NSIS or MSI package; the reviewed `kokoro-en-v0_19` assets are included.
-2. Open **Settings > RJ voice**. The bundled English voice is already selected automatically.
-3. Choose the speech speed and RJ volume, then save. No voice model path or provider process is required.
+2. Open **Settings > RJ voice**. The bundled English voice pack is already selected automatically.
+3. Choose the voice actor, speech speed, and RJ volume, then save. No voice model path or provider process is required.
 4. Use **Generate with model** and **Speak test segment** for a manual end-to-end check.
 
 Sherpa-ONNX `1.13.4` is pinned and uses its Windows shared runtime. Sanymar resolves the installed pack automatically and never downloads or replaces voice assets at runtime. Generated mono PCM WAV files are validated and written only beneath the application cache before default-device playback. The model's Apache-2.0 notice and the eSpeak NG GPL-3.0-or-later notice/source reference travel with the resource pack.
